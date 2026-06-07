@@ -260,7 +260,7 @@ function ensureLayerClass(): any {
   return LayerClass;
 }
 
-function create(opts: MercatorTileBoundariesLayerOpts = {}): any {
+function create(opts: MercatorTileBoundariesLayerOpts = { viz: 'bounds' }): any {
   const Cls = ensureLayerClass();
   return new Cls(opts);
 }

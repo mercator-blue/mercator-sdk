@@ -54,7 +54,7 @@ export type MercatorTileBoundariesLayerOpts = MercatorTileBoundariesOptions & {
   zIndex?: number;
 };
 
-function create(opts: MercatorTileBoundariesLayerOpts = {}): Layer {
+function create(opts: MercatorTileBoundariesLayerOpts = { viz: 'bounds' }): Layer {
   let minzoom = opts.minzoom ?? 0;
   let maxzoom = opts.maxzoom ?? Infinity;
   let lineWidth = opts.lineWidth ?? 1.5;
