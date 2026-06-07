@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>@mercator-blue/sdk — MapLibre GL JS smoke test</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.4.0/dist/maplibre-gl.css" />
+  <script src="https://unpkg.com/maplibre-gl@5.4.0/dist/maplibre-gl.js"></script>
+
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; font-family: system-ui, sans-serif; }
+    #map { position: absolute; inset: 0; }
+    .panel {
+      position: absolute; top: 12px; left: 12px; z-index: 10;
+      background: rgba(255,255,255,0.96); padding: 12px 14px;
+      border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+      max-width: 320px; max-height: calc(100vh - 24px); overflow-y: auto;
+      font-size: 13px; line-height: 1.4;
+    }
+    .panel h1 { margin: 0 0 6px; font-size: 14px; }
+    .panel h2 { margin: 12px 0 4px; font-size: 12px; font-weight: 600;
+      color: #555; text-transform: uppercase; letter-spacing: 0.04em; }
+    .panel code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+    .panel small { color: #666; font-size: 11px; }
+    .panel .err { color: #b00; }
+    .panel input[type="text"] { width: 100%; padding: 4px; font-family: monospace; font-size: 11px; box-sizing: border-box; }
+    .panel select { width: 100%; padding: 4px; font-size: 12px; }
+    .panel button { padding: 4px 10px; cursor: pointer; font-size: 12px; }
+    .panel input[type="range"] { width: 100%; }
+    .row { margin-top: 6px; }
+    .row label { display: block; }
+    .row label.cb { display: flex; align-items: center; gap: 6px; }
+    .row.sub { padding-left: 12px; opacity: 0.95; }
+    .row .val { float: right; color: #666; font-variant-numeric: tabular-nums; }
+    hr { border: 0; border-top: 1px solid #ddd; margin: 12px 0 4px; }
+    .controls.disabled { opacity: 0.4; pointer-events: none; }
+    .zoom-readout {
+      position: absolute; top: 12px; right: 12px; z-index: 10;
+      background: rgba(255,255,255,0.92); padding: 6px 10px;
+      border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+      font: 13px/1.2 ui-monospace, Menlo, Consolas, monospace;
+      color: #222; min-width: 64px; text-align: right;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<div class="panel" id="panel">
+  <h1>SDK on MapLibre GL JS</h1>
+  <div id="status">Ready. Paste your API key and pick a dataset.</div>
+
+  <h2>Setup</h2>
+  <div class="row">
+    <label><small>mercator.blue API key (mk_…)</small></label>
+    <input id="apikey" type="text" placeholder="mk_xxxxxxxx.…" />
+  </div>
+  <div class="row">
+    <label><small>Dataset</small></label>
+    <select id="dataset">
+      <option value="wind10m">wind10m (vector)</option>
+      <option value="temp2m">temp2m (scalar)</option>
+      <option value="currents">currents (vector, ocean)</option>
+      <option value="cape">cape (scalar)</option>
+      <option value="elevation">elevation (scalar, static)</option>
+    </select>
+  </div>
+  <div class="row">
+    <label><small>Projection</small></label>
+    <select id="projection">
+      <option value="mercator">mercator (flat)</option>
+      <option value="globe">globe</option>
+    </select>
+  </div>
+  <div class="row">
+    <label><small>Basemap</small></label>
+    <select id="basemap">
+      <option value="positron">OpenFreeMap Positron (light)</option>
+      <option value="liberty">OpenFreeMap Liberty</option>
+      <option value="bright">OpenFreeMap Bright</option>
+      <option value="dark">OpenFreeMap Dark</option>
+      <option value="satellite">Satellite (NASA Blue Marble)</option>
+    </select>
+  </div>
+  <div class="row">
+    <button id="go">Load</button>
+    <small style="margin-left:8px;">URL hash preserves settings.</small>
+  </div>
+
+  <!-- Control groups injected by mountControls() from ./controls.js. -->
+  <div id="controls" class="controls disabled"></div>
+</div>
+
+<div id="map"></div>
+<div id="zoom-readout" class="zoom-readout">z —</div>
+
+<script type="module">
+  import {
+    MercatorLayer,
+    discoverLatestItem,
+  } from '../dist/mapbox.js';
+  import { PALETTES } from '../dist/colormaps.js';
+  import { mountControls } from './controls.js';
+
+  // Render the shared control panel. mountControls builds the palette
+  // dropdown and wires slider value-readouts; behaviour handlers below.
+  mountControls({
+    container: document.getElementById('controls'),
+    groups: ['raster', 'particles', 'arrows', 'values', 'contours', 'bounds'],
+    palettes: PALETTES,
+  });
+
+  const CATALOG_URL = 'https://api.mercator.blue/catalog.json';
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $('status');
+
+  // ---------- URL-hash state round-trip ----------
+  function readHash() {
+    const p = new URLSearchParams(location.hash.slice(1));
+    if (p.get('mk')) $('apikey').value = p.get('mk');
+    if (p.get('proj')) $('projection').value = p.get('proj');
+    if (p.get('ds')) $('dataset').value = p.get('ds');
+    if (p.get('bm')) $('basemap').value = p.get('bm');
+  }
+  function writeHash() {
+    const p = new URLSearchParams();
+    if ($('apikey').value) p.set('mk', $('apikey').value);
+    p.set('proj', $('projection').value);
+    p.set('ds', $('dataset').value);
+    p.set('bm', $('basemap').value);
+    location.hash = p.toString();
+  }
+  readHash();
+
+  // ---------- basemaps ----------
+  // NASA GIBS raster imagery — public, no token. Note GIBS uses {z}/{y}/{x}
+  // tile order (y before x). Same product the deployed site offers.
+  const GIBS = {
+    satellite: {
+      tiles: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_NextGeneration/default/2004-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg',
+      maxzoom: 8,
+      attribution: 'Imagery: <a href="https://earthdata.nasa.gov/eosdis/gibs">NASA EOSDIS GIBS</a> (Blue Marble)',
+    },
+  };
+
+  function bareGibsStyle(spec) {
+    return {
+      version: 8,
+      sources: { satellite: { type: 'raster', tiles: [spec.tiles], tileSize: 256, maxzoom: spec.maxzoom, attribution: spec.attribution } },
+      layers: [{ id: 'satellite', type: 'raster', source: 'satellite', minzoom: 0, maxzoom: 19 }],
+    };
+  }
+
+  // GIBS raster + Positron's glyphs/sprite + recolored place-label symbol
+  // layers, so place names AND our contour-label symbol layers still
+  // render against the imagery (a bare raster style has no glyphs
+  // endpoint → symbol layers can't shape text). Falls back to bare raster
+  // if Positron can't be fetched. Same approach as the deployed site.
+  async function gibsStyle(spec) {
+    try {
+      const r = await fetch('https://tiles.openfreemap.org/styles/positron');
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const positron = await r.json();
+      // Positron's default `text-field` renders English/Latin on line 1 +
+      // the local non-Latin name on line 2 (e.g. Belarus + Беларусь,
+      // Morocco + ‎المغرب‎). Replace it with an English-first coalesce so
+      // only one name shows. Same patch the deployed site applies.
+      const englishTextField = ['coalesce', ['get', 'name:en'], ['get', 'name:latin'], ['get', 'name']];
+      const labelLayers = (positron.layers || [])
+        .filter((l) => l.type === 'symbol' && /place|country|continent|state/i.test(l.id || ''))
+        .map((l) => ({
+          ...l,
+          layout: (l.layout && l.layout['text-field'])
+            ? { ...l.layout, 'text-field': englishTextField }
+            : l.layout,
+          paint: {
+            ...(l.paint || {}),
+            'text-color': '#ffffff',
+            'text-halo-color': 'rgba(0, 0, 0, 0.75)',
+            'text-halo-width': 1.6,
+            'text-halo-blur': 0.5,
+          },
+        }));
+      return {
+        version: 8,
+        glyphs: positron.glyphs,
+        sprite: positron.sprite,
+        sources: {
+          satellite: { type: 'raster', tiles: [spec.tiles], tileSize: 256, maxzoom: spec.maxzoom, attribution: spec.attribution },
+          ...positron.sources,
+        },
+        layers: [
+          { id: 'satellite', type: 'raster', source: 'satellite', minzoom: 0, maxzoom: 19 },
+          ...labelLayers,
+        ],
+      };
+    } catch (e) {
+      console.warn('[maplibre-demo] GIBS labels overlay failed; bare raster:', e);
+      return bareGibsStyle(spec);
+    }
+  }
+
+  /** Resolve the selected basemap to a MapLibre style — either an
+   *  OpenFreeMap vector style URL or a GIBS raster style object. */
+  async function basemapStyle(name) {
+    const gibs = GIBS[name];
+    if (gibs) return gibsStyle(gibs);
+    switch (name) {
+      case 'liberty': return 'https://tiles.openfreemap.org/styles/liberty';
+      case 'bright':  return 'https://tiles.openfreemap.org/styles/bright';
+      case 'dark':    return 'https://tiles.openfreemap.org/styles/dark';
+      case 'positron':
+      default:        return 'https://tiles.openfreemap.org/styles/positron';
+    }
+  }
+
+  // (slider value-readouts are wired by mountControls in ./controls.js)
+
+  // ---------- per-load state ----------
+  let map = null;
+  let datasetIsVector = false;
+  let rasterLayer = null;
+  let particlesLayer = null;
+  let arrowsHandle = null;
+  let valuesHandle = null;
+  let contoursHandle = null;
+  let contoursPresets = null;
+  let boundsHandle = null;
+  // Dataset-specific particle-speed base (mercator units per (m/s) per
+  // frame at z=0). Read from each item's mercator:visualization.
+  // particle_speed_scale — wind10m's is ~6e-5 (typical 10 m/s wind),
+  // currents is ~0.0036 (typical 0.5 m/s currents). The slider scales
+  // around this base; without per-dataset bases, currents particles
+  // appear motionless because wind's 6e-5 is ~60× too slow for them.
+  let particleSpeedScaleBase = 6e-5;
+
+  // OpenFreeMap's glyph endpoint serves a single font and 404s any
+  // multi-font fontstack URL. MapLibre symbol layers using the SDK's
+  // default ['Open Sans Regular', …] fallback render no text on
+  // OpenFreeMap basemaps. Override to the only font OpenFreeMap
+  // actually serves.
+  const TEXT_FONT = ['Noto Sans Regular'];
+
+  // ---------- helpers ----------
+  function firstSymbolLayerId() {
+    if (!map) return undefined;
+    for (const layer of map.getStyle().layers || []) {
+      if (layer.type === 'symbol') return layer.id;
+    }
+    return undefined;
+  }
+
+  const ARROWS_LINE_LAYER_ID = '__debug_arrows_lines';
+  const CONTOURS_BOTTOM_LAYER_ID = '__contours_lines_custom';
+
+  function beforeIdForRaster() {
+    if (map?.getLayer(CONTOURS_BOTTOM_LAYER_ID)) return CONTOURS_BOTTOM_LAYER_ID;
+    if (map?.getLayer(ARROWS_LINE_LAYER_ID)) return ARROWS_LINE_LAYER_ID;
+    if (particlesLayer && map.getLayer(particlesLayer.id)) return particlesLayer.id;
+    return firstSymbolLayerId();
+  }
+  function beforeIdForContours() {
+    if (map?.getLayer(ARROWS_LINE_LAYER_ID)) return ARROWS_LINE_LAYER_ID;
+    if (particlesLayer && map.getLayer(particlesLayer.id)) return particlesLayer.id;
+    return firstSymbolLayerId();
+  }
+  function beforeIdForArrows() {
+    if (particlesLayer && map.getLayer(particlesLayer.id)) return particlesLayer.id;
+    return firstSymbolLayerId();
+  }
+  function beforeIdForParticles() {
+    return firstSymbolLayerId();
+  }
+
+  // ---------- main load ----------
+  $('go').addEventListener('click', () => loadAll().catch(showErr));
+
+  async function loadAll() {
+    const apiKey = $('apikey').value.trim();
+    if (!apiKey.startsWith('mk_')) { showErr('Need an mk_… mercator API key.'); return; }
+    writeHash();
+    statusEl.textContent = 'Initialising MapLibre map…';
+
+    if (map) {
+      map.remove();
+      rasterLayer = particlesLayer = null;
+      arrowsHandle = valuesHandle = contoursHandle = boundsHandle = null;
+      contoursPresets = null;
+    }
+
+    const style = await basemapStyle($('basemap').value);
+    map = new maplibregl.Map({
+      container: 'map',
+      style,
+      center: [0, 20], zoom: 1.5,
+    });
+    map.on('error', (e) => showErr(`MapLibre: ${e.error?.message ?? e}`));
+
+    await new Promise((res) => map.on('load', res));
+
+    // Globe must be applied INSIDE style.load (constructor's projection
+    // option gets silently overridden by the loaded style's own
+    // projection field). See CLAUDE.md "MapLibre 5 globe gotchas".
+    map.on('style.load', () => {
+      const want = $('projection').value;
+      if (want === 'globe') map.setProjection({ type: 'globe' });
+    });
+    if ($('projection').value === 'globe') map.setProjection({ type: 'globe' });
+
+    // Live zoom readout in the top-right.
+    const zoomEl = $('zoom-readout');
+    const updateZoom = () => { zoomEl.textContent = `z ${map.getZoom().toFixed(2)}`; };
+    map.on('move', updateZoom);
+    updateZoom();
+
+    // Console-debug handle. Bare `map` in DevTools refers to the
+    // <div id="map">; expose the MapLibre instance under a different
+    // name plus a tiny helper that summarises what the contour vector
+    // source currently has loaded.
+    window.mlmap = map;
+    window.contoursAtThisZoom = () => {
+      const fs = map.querySourceFeatures('__contours_src', { sourceLayer: 'contours' });
+      const byInterval = {};
+      for (const f of fs) {
+        const i = f.properties.interval;
+        byInterval[i] = (byInterval[i] || 0) + 1;
+      }
+      return {
+        zoom: +map.getZoom().toFixed(2),
+        total: fs.length,
+        byInterval,
+        sample: fs.slice(0, 3).map((f) => ({
+          value: f.properties.value,
+          interval: f.properties.interval,
+          geometry: f.geometry.type,
+        })),
+      };
+    };
+    statusEl.textContent = 'Map loaded. Discovering dataset…';
+
+    const dataset = $('dataset').value;
+    datasetIsVector = dataset === 'wind10m' || dataset === 'currents' || dataset === 'wind100m';
+
+    $('show-particles').checked = datasetIsVector;
+    $('show-raster').checked = !datasetIsVector;
+    $('show-arrows').checked = false;
+    $('show-values').checked = false;
+    $('show-contours').checked = false;
+    $('show-bounds').checked = false;
+    $('interval').disabled = true;
+    $('interval-val').textContent = '—';
+
+    try {
+      if ($('show-raster').checked) await ensureRaster();
+      if (datasetIsVector && $('show-particles').checked) await ensureParticles();
+      $('controls').classList.remove('disabled');
+      statusEl.innerHTML = `Rendered <code>${dataset}</code> on MapLibre GL JS ${maplibregl.version} (${$('projection').value}).`;
+    } catch (err) {
+      showErr(`SDK: ${err.message}`);
+      console.error(err);
+    }
+  }
+
+  // ---------- per-overlay toggle handlers ----------
+  async function ensureRaster() {
+    const dataset = $('dataset').value;
+    const apiKey = $('apikey').value.trim();
+    rasterLayer = await MercatorLayer.create({
+      dataset, apiKey, catalogUrl: CATALOG_URL,
+      viz: 'raster',
+      id: `raster-${dataset}`,
+      colormap: $('palette').value,
+      opacity: (+$('opacity').value) / 100,
+      beforeId: beforeIdForRaster(),
+    });
+    rasterLayer.addTo(map);
+  }
+  async function removeRaster() {
+    if (rasterLayer) { rasterLayer.remove(); rasterLayer = null; }
+  }
+
+  async function ensureParticles() {
+    if (!datasetIsVector) return;
+    const dataset = $('dataset').value;
+    const apiKey = $('apikey').value.trim();
+    // Read the dataset's own particle_speed_scale from STAC so the
+    // slider's "1.0" mark matches the natural speed for that dataset.
+    const item = await discoverLatestItem(CATALOG_URL, dataset);
+    particleSpeedScaleBase = item.visualization?.particle_speed_scale ?? 6e-5;
+    particlesLayer = MercatorLayer.fromItem({
+      dataset, apiKey, catalogUrl: CATALOG_URL,
+      viz: 'streamlines',
+      id: `particles-${dataset}`,
+      particleCount: +$('count').value,
+      pointSize: +$('size').value,
+      speedScale: (+$('speed').value) * particleSpeedScaleBase,
+      maxAge: +$('age').value * 60,
+      fade: (+$('fade').value) / 100,
+      colorBySpeed: $('cbs').checked,
+      colormap: $('palette').value,
+      beforeId: beforeIdForParticles(),
+    }, item);
+    particlesLayer.addTo(map);
+  }
+  async function removeParticles() {
+    if (particlesLayer) { particlesLayer.remove(); particlesLayer = null; }
+  }
+
+  async function ensureArrows() {
+    if (!datasetIsVector) return;
+    const dataset = $('dataset').value;
+    const apiKey = $('apikey').value.trim();
+    arrowsHandle = await MercatorLayer.create({
+      dataset, apiKey, catalogUrl: CATALOG_URL,
+      viz: 'arrows',
+      beforeId: beforeIdForArrows(),
+    });
+    arrowsHandle.addTo(map);
+  }
+  function removeArrows() {
+    if (arrowsHandle) { arrowsHandle.remove(); arrowsHandle = null; }
+  }
+
+  async function ensureValues() {
+    const dataset = $('dataset').value;
+    const apiKey = $('apikey').value.trim();
+    valuesHandle = await MercatorLayer.create({
+      dataset, apiKey, catalogUrl: CATALOG_URL,
+      viz: 'values',
+      textFont: TEXT_FONT,
+    });
+    valuesHandle.addTo(map);
+  }
+  function removeValues() {
+    if (valuesHandle) { valuesHandle.remove(); valuesHandle = null; }
+  }
+
+  async function ensureContours() {
+    const dataset = $('dataset').value;
+    const apiKey = $('apikey').value.trim();
+    const item = await discoverLatestItem(CATALOG_URL, dataset);
+    if (!item.contour) {
+      throw new Error(`dataset "${dataset}" has no contour pyramid published.`);
+    }
+    contoursPresets = item.contour.presets;
+    const initialIdx = Math.max(
+      0,
+      contoursPresets.indexOf(item.contour.default_interval),
+    );
+    const slider = $('interval');
+    slider.min = '0';
+    slider.max = String(contoursPresets.length - 1);
+    slider.step = '1';
+    slider.value = String(initialIdx);
+    slider.disabled = false;
+    $('interval-val').textContent = `${contoursPresets[initialIdx]} ${item.contour.unit}`;
+    contoursHandle = MercatorLayer.fromItem({
+      dataset, apiKey, catalogUrl: CATALOG_URL,
+      viz: 'contours',
+      initialInterval: contoursPresets[initialIdx],
+      beforeId: beforeIdForContours(),
+      textFont: TEXT_FONT,
+    }, item);
+    contoursHandle.addTo(map);
+  }
+  function removeContours() {
+    if (contoursHandle) { contoursHandle.remove(); contoursHandle = null; }
+    contoursPresets = null;
+    $('interval').disabled = true;
+    $('interval-val').textContent = '—';
+  }
+
+  async function ensureBounds() {
+    boundsHandle = await MercatorLayer.create({
+      viz: 'bounds',
+      textFont: TEXT_FONT,
+    });
+    boundsHandle.addTo(map);
+  }
+  function removeBounds() {
+    if (boundsHandle) { boundsHandle.remove(); boundsHandle = null; }
+  }
+
+  // ---------- wire toggles ----------
+  $('show-raster').addEventListener('change', async () => {
+    try {
+      if ($('show-raster').checked) {
+        if (!rasterLayer) await ensureRaster();
+      } else {
+        await removeRaster();
+      }
+    } catch (err) { showErr(err.message); console.error(err); }
+  });
+  $('show-particles').addEventListener('change', async () => {
+    try {
+      if ($('show-particles').checked) {
+        if (!particlesLayer) await ensureParticles();
+      } else {
+        await removeParticles();
+      }
+    } catch (err) { showErr(err.message); console.error(err); }
+  });
+  $('show-arrows').addEventListener('change', async () => {
+    try {
+      if ($('show-arrows').checked) {
+        if (!arrowsHandle) await ensureArrows();
+      } else {
+        removeArrows();
+      }
+    } catch (err) { showErr(err.message); console.error(err); }
+  });
+  $('show-values').addEventListener('change', async () => {
+    try {
+      if ($('show-values').checked) {
+        if (!valuesHandle) await ensureValues();
+      } else {
+        removeValues();
+      }
+    } catch (err) { showErr(err.message); console.error(err); }
+  });
+  $('show-contours').addEventListener('change', async () => {
+    try {
+      if ($('show-contours').checked) {
+        if (!contoursHandle) await ensureContours();
+      } else {
+        removeContours();
+      }
+    } catch (err) {
+      showErr(err.message); console.error(err);
+      $('show-contours').checked = false;
+    }
+  });
+  $('interval').addEventListener('input', () => {
+    if (!contoursHandle || !contoursPresets) return;
+    const idx = +$('interval').value;
+    const v = contoursPresets[idx];
+    contoursHandle.setOptions({ initialInterval: v });
+    const unitSuffix = $('interval-val').textContent.replace(/^[-\d.]+\s*/, '');
+    $('interval-val').textContent = `${v} ${unitSuffix}`.trim();
+  });
+  $('show-bounds').addEventListener('change', async () => {
+    try {
+      if ($('show-bounds').checked) {
+        if (!boundsHandle) await ensureBounds();
+      } else {
+        removeBounds();
+      }
+    } catch (err) { showErr(err.message); console.error(err); }
+  });
+
+  // ---------- live setters ----------
+  $('opacity').addEventListener('input', () => {
+    if (rasterLayer) rasterLayer.setOptions({ opacity: (+$('opacity').value) / 100 });
+  });
+  $('palette').addEventListener('change', () => {
+    if (rasterLayer) rasterLayer.setOptions({ colormap: $('palette').value });
+    if (particlesLayer) particlesLayer.setOptions({ colormap: $('palette').value });
+  });
+  $('count').addEventListener('input', () => {
+    if (particlesLayer) particlesLayer.setOptions({ particleCount: +$('count').value });
+  });
+  $('size').addEventListener('input', () => {
+    if (particlesLayer) particlesLayer.setOptions({ pointSize: +$('size').value });
+  });
+  $('speed').addEventListener('input', () => {
+    if (particlesLayer) particlesLayer.setOptions({ speedScale: (+$('speed').value) * particleSpeedScaleBase });
+  });
+  $('age').addEventListener('input', () => {
+    if (particlesLayer) particlesLayer.setOptions({ maxAge: (+$('age').value) * 60 });
+  });
+  $('fade').addEventListener('input', () => {
+    if (particlesLayer) particlesLayer.setOptions({ fade: (+$('fade').value) / 100 });
+  });
+  $('cbs').addEventListener('change', () => {
+    if (particlesLayer) particlesLayer.setOptions({ colorBySpeed: $('cbs').checked });
+  });
+
+  function showErr(msg) {
+    statusEl.innerHTML = `<span class="err">${msg}</span>`;
+  }
+</script>
+
+</body>
+</html>

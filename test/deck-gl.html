@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>@mercator-blue/sdk — deck.gl smoke test</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.4.0/dist/maplibre-gl.css" />
+  <script src="https://unpkg.com/maplibre-gl@5.4.0/dist/maplibre-gl.js"></script>
+
+  <!--
+    Resolve our SDK's `@deck.gl/*` bare imports via the esm.sh CDN. This
+    matches what a customer's bundler (Vite, Webpack) would do at build
+    time. For production usage they'd install the packages locally; for a
+    standalone test page hitting `dist/deck-gl.js` directly, the import
+    map is the simplest path that doesn't require us to bundle deck.gl
+    into the SDK output.
+  -->
+  <!--
+    Versions match the SDK's local node_modules so transitive @luma.gl/*
+    imports resolve to a self-consistent set. Without pinning every
+    transitive dep, esm.sh chose a newer luma.gl that deck.gl 9.3.2
+    isn't compatible with (Uncaught SyntaxError: '…' does not provide
+    an export named 'getTypedArrayFromDataType').
+  -->
+  <script type="importmap">
+  {
+    "imports": {
+      "@deck.gl/core": "https://esm.sh/@deck.gl/core@9.3.2?deps=@luma.gl/core@9.3.3,@luma.gl/engine@9.3.3,@luma.gl/shadertools@9.3.3,@luma.gl/webgl@9.3.3",
+      "@deck.gl/layers": "https://esm.sh/@deck.gl/layers@9.3.2?deps=@deck.gl/core@9.3.2,@luma.gl/core@9.3.3,@luma.gl/engine@9.3.3,@luma.gl/shadertools@9.3.3,@luma.gl/webgl@9.3.3",
+      "@deck.gl/geo-layers": "https://esm.sh/@deck.gl/geo-layers@9.3.2?deps=@deck.gl/core@9.3.2,@deck.gl/layers@9.3.2,@luma.gl/core@9.3.3,@luma.gl/engine@9.3.3,@luma.gl/shadertools@9.3.3,@luma.gl/webgl@9.3.3",
+      "@deck.gl/mapbox": "https://esm.sh/@deck.gl/mapbox@9.3.2?deps=@deck.gl/core@9.3.2,@luma.gl/core@9.3.3,@luma.gl/engine@9.3.3,@luma.gl/shadertools@9.3.3,@luma.gl/webgl@9.3.3",
+      "@luma.gl/core": "https://esm.sh/@luma.gl/core@9.3.3",
+      "@luma.gl/engine": "https://esm.sh/@luma.gl/engine@9.3.3?deps=@luma.gl/core@9.3.3,@luma.gl/shadertools@9.3.3",
+      "@luma.gl/shadertools": "https://esm.sh/@luma.gl/shadertools@9.3.3?deps=@luma.gl/core@9.3.3",
+      "@luma.gl/webgl": "https://esm.sh/@luma.gl/webgl@9.3.3?deps=@luma.gl/core@9.3.3"
+    }
+  }
+  </script>
+
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; font-family: system-ui, sans-serif; }
+    #map { position: absolute; inset: 0; }
+    .panel {
+      position: absolute; top: 12px; left: 12px; z-index: 10;
+      background: rgba(255,255,255,0.96); padding: 12px 14px;
+      border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+      max-width: 320px; max-height: calc(100vh - 24px); overflow-y: auto;
+      font-size: 13px; line-height: 1.4;
+    }
+    .panel h1 { margin: 0 0 6px; font-size: 14px; }
+    .panel h2 { margin: 12px 0 4px; font-size: 12px; font-weight: 600;
+      color: #555; text-transform: uppercase; letter-spacing: 0.04em; }
+    .panel code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+    .panel small { color: #666; font-size: 11px; }
+    .panel .err { color: #b00; }
+    .panel input[type="text"] { width: 100%; padding: 4px; font-family: monospace; font-size: 11px; box-sizing: border-box; }
+    .panel input[type="range"] { width: 100%; }
+    .panel select { width: 100%; padding: 4px; font-size: 12px; }
+    .panel button { padding: 4px 10px; cursor: pointer; font-size: 12px; }
+    .row .val { float: right; color: #666; font-variant-numeric: tabular-nums; }
+    .row { margin-top: 6px; }
+    .row label { display: block; }
+    .row label.cb { display: flex; align-items: center; gap: 6px; }
+    .row.sub { padding-left: 12px; opacity: 0.95; }
+    hr { border: 0; border-top: 1px solid #ddd; margin: 12px 0 4px; }
+    .controls.disabled { opacity: 0.4; pointer-events: none; }
+    .zoom-readout {
+      position: absolute; top: 12px; right: 12px; z-index: 10;
+      background: rgba(255,255,255,0.92); padding: 6px 10px;
+      border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+      font: 13px/1.2 ui-monospace, Menlo, Consolas, monospace;
+      color: #222; min-width: 64px; text-align: right;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<div class="panel" id="panel">
+  <h1>SDK on deck.gl + MapLibre</h1>
+  <div id="status">Ready. Paste your API key and pick a dataset.</div>
+  <small>
+    Pattern: MapLibre is the basemap host; deck.gl layers are added via
+    <code>MapboxOverlay</code>. Same integration story most customers
+    use today.
+  </small>
+  <small style="display:block; margin-top:6px; color:#a05;">
+    <strong>Flat Mercator only.</strong> Globe projection isn't supported
+    when deck.gl layers are hosted by <code>MapboxOverlay</code> — the
+    deck.gl <code>BitmapLayer</code> we extend projects to flat Mercator
+    regardless of the host's projection. Use the Mapbox or MapLibre
+    bindings for globe.
+  </small>
+  <small style="display:block; margin-top:6px; color:#a05;">
+    <strong>Deep-pyramid datasets pan sluggishly.</strong> The
+    <code>elevation</code> dataset (maxzoom=8) feels laggy when zoomed past
+    z≈6 because every new tile spawns a fresh <code>BitmapLayer</code>
+    instance with its own shader compile. Shallow pyramids
+    (<code>temp2m</code> maxzoom=5) overzoom one parent and don't hit
+    this. Same caveat as globe — use the Mapbox/MapLibre bindings if
+    smooth panning of high-detail datasets matters.
+  </small>
+
+  <h2>Setup</h2>
+  <div class="row">
+    <label><small>mercator.blue API key (mk_…)</small></label>
+    <input id="apikey" type="text" placeholder="mk_xxxxxxxx.…" />
+  </div>
+  <div class="row">
+    <label><small>Dataset</small></label>
+    <select id="dataset">
+      <option value="temp2m">temp2m (scalar)</option>
+      <option value="cape">cape (scalar)</option>
+      <option value="elevation">elevation (scalar, static)</option>
+      <option value="wind10m">wind10m (vector)</option>
+      <option value="currents">currents (vector)</option>
+    </select>
+  </div>
+  <div class="row">
+    <label><small>Basemap</small></label>
+    <select id="basemap">
+      <option value="positron">OpenFreeMap Positron (light)</option>
+      <option value="liberty">OpenFreeMap Liberty</option>
+      <option value="bright">OpenFreeMap Bright</option>
+      <option value="dark">OpenFreeMap Dark</option>
+    </select>
+  </div>
+  <div class="row">
+    <button id="go">Load</button>
+    <small style="margin-left:8px;">URL hash preserves settings.</small>
+  </div>
+
+  <!-- Control groups injected by mountControls() from ./controls.js. -->
+  <div id="controls" class="controls disabled"></div>
+</div>
+
+<div id="map"></div>
+<div id="zoom-readout" class="zoom-readout">z —</div>
+
+<script type="module">
+  import {
+    MercatorLayer,
+    discoverLatestItem,
+  } from '../dist/deck-gl.js';
+  import { PALETTES } from '../dist/colormaps.js';
+  import { MapboxOverlay } from '@deck.gl/mapbox';
+  import { mountControls } from './controls.js';
+
+  // Render the shared control panel. deck.gl has no contours binding, so
+  // that group is omitted; count defaults to 4000 (deck's CPU particle
+  // sim is heavier than the GPU-projected Mapbox/MapLibre path). The
+  // capability hints are toggled per-dataset by updateControlsUI().
+  mountControls({
+    container: document.getElementById('controls'),
+    groups: ['raster', 'arrows', 'particles', 'values', 'bounds'],
+    palettes: PALETTES,
+    raster: {
+      hint: 'Vector datasets colour by speed magnitude (√(u²+v²)).',
+      paletteHint: 'Elevation uses built-in hypsometric tinting; palette ignored.',
+    },
+    arrows: { hint: 'Vector-only — pick wind10m or currents.' },
+    particles: { count: 4000, hint: 'Vector-only — pick wind10m or currents.' },
+    values: { hint: 'Scalar value or vector speed magnitude. Not available for elevation (mapbox_rgb).' },
+  });
+
+  const CATALOG_URL = 'https://api.mercator.blue/catalog.json';
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $('status');
+
+  // ---------- URL-hash state round-trip ----------
+  function readHash() {
+    const p = new URLSearchParams(location.hash.slice(1));
+    if (p.get('mk')) $('apikey').value = p.get('mk');
+    if (p.get('ds')) $('dataset').value = p.get('ds');
+    if (p.get('bm')) $('basemap').value = p.get('bm');
+  }
+  function writeHash() {
+    const p = new URLSearchParams();
+    if ($('apikey').value) p.set('mk', $('apikey').value);
+    p.set('ds', $('dataset').value);
+    p.set('bm', $('basemap').value);
+    location.hash = p.toString();
+  }
+  readHash();
+
+  function basemapUrl(name) {
+    switch (name) {
+      case 'liberty':  return 'https://tiles.openfreemap.org/styles/liberty';
+      case 'positron': return 'https://tiles.openfreemap.org/styles/positron';
+      case 'bright':   return 'https://tiles.openfreemap.org/styles/bright';
+      case 'dark':     return 'https://tiles.openfreemap.org/styles/dark';
+      default:         return 'https://tiles.openfreemap.org/styles/positron';
+    }
+  }
+
+  // ---------- per-load state ----------
+  let map = null;
+  let overlay = null;
+
+  // ---------- main load ----------
+  $('go').addEventListener('click', () => loadAll().catch(showErr));
+
+  async function loadAll() {
+    const apiKey = $('apikey').value.trim();
+    if (!apiKey.startsWith('mk_')) { showErr('Need an mk_… mercator API key.'); return; }
+    writeHash();
+    statusEl.textContent = 'Initialising MapLibre + deck.gl…';
+
+    if (map) {
+      map.remove();
+      overlay = null;
+    }
+
+    map = new maplibregl.Map({
+      container: 'map',
+      style: basemapUrl($('basemap').value),
+      center: [0, 20], zoom: 1.5,
+    });
+    map.on('error', (e) => showErr(`MapLibre: ${e.error?.message ?? e}`));
+
+    await new Promise((res) => map.on('load', res));
+
+    // Live zoom readout in the top-right.
+    const zoomEl = $('zoom-readout');
+    const updateZoom = () => { zoomEl.textContent = `z ${map.getZoom().toFixed(2)}`; };
+    map.on('move', updateZoom);
+    updateZoom();
+
+    // Expose for devtools (bare `map` resolves to <div id="map">).
+    window.mlmap = map;
+
+    // Build deck.gl overlay; layers populated by the toggle handlers
+    // below. addControl wires it into MapLibre's render loop.
+    overlay = new MapboxOverlay({ layers: [] });
+    map.addControl(overlay);
+    window.dgOverlay = overlay;
+
+    statusEl.innerHTML = `Map loaded. Dataset: <code>${$('dataset').value}</code>.`;
+    $('controls').classList.remove('disabled');
+
+    // Prime the per-dataset particle-speed base so the speed slider
+    // means something meaningful on the first show-particles toggle.
+    void fetchCurrentItem();
+
+    if ($('show-raster').checked) refreshLayers();
+  }
+
+  // ---------- layer construction ----------
+  const VECTOR_DATASETS = new Set(['wind10m', 'currents']);
+
+  // Dataset-specific particle-speed base. Same shape as the
+  // Mapbox/MapLibre test pages: slider is a multiplier × base, where
+  // base comes from STAC `mercator:visualization.particle_speed_scale`
+  // so wind (~6e-5) and currents (~3.6e-3) each animate at their
+  // natural rate. Initial fallback is wind10m's value.
+  let currentItem = null;
+  let particleSpeedScaleBase = 6e-5;
+  // Discover the active dataset's STAC item once per dataset change.
+  // Doubles as the source for `particleSpeedScaleBase` (vector datasets
+  // only) and as the input to `MercatorLayer.fromItem` (all datasets).
+  async function fetchCurrentItem() {
+    const ds = $('dataset').value;
+    try {
+      currentItem = await discoverLatestItem(CATALOG_URL, ds);
+      particleSpeedScaleBase = currentItem.visualization?.particle_speed_scale ?? 6e-5;
+      refreshLayers();
+    } catch (e) {
+      console.warn('[deck-gl test] could not fetch item:', e);
+    }
+  }
+
+  // (slider value-readouts are wired by mountControls in ./controls.js)
+
+  function buildLayers() {
+    const apiKey = $('apikey').value.trim();
+    const ds = $('dataset').value;
+    const isVector = VECTOR_DATASETS.has(ds);
+    const layers = [];
+    // Raster handles every encoding: scalars colour by value, vectors
+    // by speed magnitude (√(u²+v²)), elevation by hypsometric tint.
+    if ($('show-raster').checked && currentItem) {
+      layers.push(MercatorLayer.fromItem({
+        id: `raster-${ds}`,
+        dataset: ds,
+        apiKey,
+        catalogUrl: CATALOG_URL,
+        viz: 'raster',
+        colormap: $('palette').value,
+        opacity: (+$('opacity').value) / 100,
+      }, currentItem));
+    }
+    if ($('show-arrows').checked && isVector && currentItem) {
+      layers.push(MercatorLayer.fromItem({
+        id: `arrows-${ds}`,
+        dataset: ds,
+        apiKey,
+        catalogUrl: CATALOG_URL,
+        viz: 'arrows',
+        colormap: $('palette').value,
+      }, currentItem));
+    }
+    if ($('show-particles').checked && isVector && currentItem) {
+      layers.push(MercatorLayer.fromItem({
+        id: `particles-${ds}`,
+        dataset: ds,
+        apiKey,
+        catalogUrl: CATALOG_URL,
+        viz: 'streamlines',
+        colormap: $('palette').value,
+        particleCount: +$('count').value,
+        pointSize: +$('size').value,
+        // Slider × dataset-specific STAC base. See fetchCurrentItem().
+        speedScale: (+$('speed').value) * particleSpeedScaleBase,
+        // age slider is in seconds; layer wants frames at ~60 fps.
+        maxAge: (+$('age').value) * 60,
+        // fade slider is 85..99; layer wants 0..1.
+        fade: (+$('fade').value) / 100,
+        colorBySpeed: $('cbs').checked,
+      }, currentItem));
+    }
+    // Value labels: scalar value or vector speed magnitude. Elevation
+    // (mapbox_rgb) is unsupported — gated off in updateControlsUI.
+    if ($('show-values').checked && ds !== 'elevation' && currentItem) {
+      layers.push(MercatorLayer.fromItem({
+        id: `values-${ds}`,
+        dataset: ds,
+        apiKey,
+        catalogUrl: CATALOG_URL,
+        viz: 'values',
+      }, currentItem));
+    }
+    if ($('show-bounds').checked) {
+      layers.push(MercatorLayer.fromItem({ viz: 'bounds', id: 'tile-bounds' }, null));
+    }
+    return layers;
+  }
+  function refreshLayers() {
+    if (!overlay) return;
+    overlay.setProps({ layers: buildLayers() });
+  }
+
+  // Per-dataset-kind UI hints. Palette is irrelevant for elevation
+  // (hypsometric); raster overlay is irrelevant for vector datasets
+  // (no scalar to colour); arrows are irrelevant for scalar datasets.
+  function updateControlsUI() {
+    const ds = $('dataset').value;
+    const isElevation = ds === 'elevation';
+    const isVector = VECTOR_DATASETS.has(ds);
+    $('palette').disabled = isElevation;
+    $('palette-hint').style.display = isElevation ? 'block' : 'none';
+    // Raster is supported for every encoding; just show a hint for
+    // vector so the user knows it's the speed magnitude that's coloured.
+    $('raster-hint').style.display = isVector ? 'block' : 'none';
+    $('show-arrows').disabled = !isVector;
+    $('arrows-hint').style.display = isVector ? 'none' : 'block';
+    $('show-particles').disabled = !isVector;
+    $('particles-hint').style.display = isVector ? 'block' : 'none';
+    // Value labels work for scalar + vector (magnitude), but not for
+    // elevation's mapbox_rgb encoding.
+    $('show-values').disabled = isElevation;
+    $('values-hint').style.display = isElevation ? 'block' : 'none';
+    // Default overlay selection per dataset kind (matches maplibre/mapbox):
+    // raster for scalar/elevation, particles for vector — so a vector
+    // dataset still shows motion when the colour overlay defaults off.
+    $('show-raster').checked = !isVector;
+    $('show-particles').checked = isVector;
+  }
+
+  // ---------- wire toggles ----------
+  $('show-raster').addEventListener('change', refreshLayers);
+  $('opacity').addEventListener('input', refreshLayers);
+  $('show-arrows').addEventListener('change', refreshLayers);
+  $('show-particles').addEventListener('change', refreshLayers);
+  $('show-values').addEventListener('change', refreshLayers);
+  $('palette').addEventListener('change', refreshLayers);
+  $('show-bounds').addEventListener('change', refreshLayers);
+  // Particle-knob sliders: rebuild the streamlines layer on each change.
+  // deck.gl reconciles by id so GPU resources (FBOs, programs) survive;
+  // only the props change.
+  for (const id of ['count', 'size', 'speed', 'age', 'fade']) {
+    $(id).addEventListener('input', refreshLayers);
+  }
+  $('cbs').addEventListener('change', refreshLayers);
+  $('dataset').addEventListener('change', () => {
+    updateControlsUI();
+    void fetchCurrentItem();
+  });
+  updateControlsUI();
+
+  function showErr(msg) {
+    statusEl.innerHTML = `<span class="err">${msg}</span>`;
+  }
+</script>
+
+</body>
+</html>

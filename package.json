@@ -1,0 +1,123 @@
+{
+  "name": "@mercator-blue/sdk",
+  "version": "0.1.0",
+  "description": "Drop-in WebGL map layers for gridded earth data (weather, ocean, air quality, elevation) served by mercator.blue. MapLibre, Mapbox GL JS, Leaflet, OpenLayers, deck.gl.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./mapbox": {
+      "types": "./dist/mapbox.d.ts",
+      "import": "./dist/mapbox.js",
+      "require": "./dist/mapbox.cjs"
+    },
+    "./deck-gl": {
+      "types": "./dist/deck-gl.d.ts",
+      "import": "./dist/deck-gl.js",
+      "require": "./dist/deck-gl.cjs"
+    },
+    "./leaflet": {
+      "types": "./dist/leaflet.d.ts",
+      "import": "./dist/leaflet.js",
+      "require": "./dist/leaflet.cjs"
+    },
+    "./openlayers": {
+      "types": "./dist/openlayers.d.ts",
+      "import": "./dist/openlayers.js",
+      "require": "./dist/openlayers.cjs"
+    },
+    "./schemas": {
+      "types": "./dist/schemas/index.d.ts",
+      "import": "./dist/schemas/index.js",
+      "require": "./dist/schemas/index.cjs"
+    },
+    "./colormaps": {
+      "types": "./dist/colormaps.d.ts",
+      "import": "./dist/colormaps.js",
+      "require": "./dist/colormaps.cjs"
+    }
+  },
+  "sideEffects": [
+    "./dist/schemas/**"
+  ],
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "weather",
+    "ocean",
+    "maplibre",
+    "mapbox",
+    "deck.gl",
+    "leaflet",
+    "openlayers",
+    "gis",
+    "tile",
+    "raster",
+    "mercator"
+  ],
+  "homepage": "https://mercator.blue",
+  "bugs": {
+    "url": "https://github.com/mercator-blue/mercator-sdk/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mercator-blue/mercator-sdk.git"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@deck.gl/core": "^9.1.0",
+    "@deck.gl/geo-layers": "^9.1.0",
+    "@deck.gl/layers": "^9.1.0",
+    "@deck.gl/mapbox": "^9.1.0",
+    "@luma.gl/core": "^9.1.0",
+    "@luma.gl/engine": "^9.1.0",
+    "ol": "^10.0.0",
+    "tsup": "^8.3.5",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@asteasolutions/zod-to-openapi": "^8.5.0",
+    "@mapbox/vector-tile": "^2.0.0",
+    "pbf": "^4.0.1",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "maplibre-gl": ">=4.0.0",
+    "@deck.gl/core": ">=9.0.0",
+    "@deck.gl/layers": ">=9.0.0",
+    "ol": ">=8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "maplibre-gl": {
+      "optional": true
+    },
+    "@deck.gl/core": {
+      "optional": true
+    },
+    "@deck.gl/layers": {
+      "optional": true
+    },
+    "ol": {
+      "optional": true
+    }
+  }
+}

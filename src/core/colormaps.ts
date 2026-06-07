@@ -1,0 +1,120 @@
+/**
+ * Resolver for value-encoded raster colormaps.
+ *
+ * A "colormap spec" is one of:
+ *
+ *   1. A string palette name — e.g. `"rdbu"`, `"viridis"` — looked up in
+ *      `PALETTES` (re-exported from `./palettes`). Built-ins are canonical
+ *      256-entry tables sampled from matplotlib (the generator is
+ *      `scripts/gen_palettes.py`), so they reproduce the source colormap
+ *      exactly rather than approximating it with a handful of stops.
+ *   2. An explicit `{ stops: [[position, "#rrggbb"], ...] }` object,
+ *      with positions in [0, 1]. For when the customer's brand uses a
+ *      palette we don't ship — resampled onto the same 256-entry grid.
+ *
+ * `resolveColormap()` returns a `Float32Array(COLORMAP_SIZE * 3)` of RGB
+ * triples in [0, 1]. The raster / streamlines shaders upload it as a
+ * 256×1 RGBA LUT texture (`core/colormap-texture.ts`) and sample it with a
+ * single `texture()` fetch; CPU-side consumers (the arrows layers' speed →
+ * colour) read the array directly and are resolution-agnostic.
+ */
+
+import type { Colormap, ColormapSpec } from './types';
+import { PALETTES, PALETTE_SIZE } from './palettes';
+
+// Re-exported so the public `@mercator-blue/sdk/colormaps` subpath
+// exposes both the registry AND the resolver (and the underlying
+// types, for callers constructing their own palettes) from a single
+// import.
+export { PALETTES } from './palettes';
+export type { Colormap, ColormapStop, ColormapSpec } from './types';
+
+export const COLORMAP_SIZE = PALETTE_SIZE;
+
+type RGB = [number, number, number];
+/** A stop with the hex already decoded to 0..255 RGB; sampleStops works
+ *  in this form because the spec's hex strings are parsed once up-front. */
+type ParsedStop = [number, RGB];
+
+function hexToRgb(hex: string): RGB {
+  let h = hex.replace('#', '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  const n = parseInt(h, 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+}
+
+/** Sample an array of [position, [r,g,b]] stops at a given t in [0,1]. */
+function sampleStops(stops: ParsedStop[], t: number): RGB {
+  t = Math.max(0, Math.min(1, t));
+  // Stops are sorted by position. Find the segment.
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [p0, c0] = stops[i];
+    const [p1, c1] = stops[i + 1];
+    if (t <= p1) {
+      const span = Math.max(p1 - p0, 1e-9);
+      const local = (t - p0) / span;
+      return [
+        c0[0] + (c1[0] - c0[0]) * local,
+        c0[1] + (c1[1] - c0[1]) * local,
+        c0[2] + (c1[2] - c0[2]) * local,
+      ];
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
+/** A built-in palette table (Uint8 RGB, PALETTE_SIZE × 3) → normalised
+ *  Float32 RGB in [0, 1]. The table is already at the target resolution,
+ *  so this is a straight per-byte divide — no resampling. */
+function normaliseTable(table: Uint8Array): Float32Array {
+  const out = new Float32Array(table.length);
+  for (let i = 0; i < table.length; i++) out[i] = table[i] / 255;
+  return out;
+}
+
+// Names we've already warned about — keep the console clean if a
+// caller passes an unknown name in a tight loop (e.g. on every render).
+const _warnedUnknownPalettes = new Set<string>();
+
+/** Normalise a colormap spec into a `Float32Array(COLORMAP_SIZE * 3)`
+ *  — RGB triples in [0, 1].
+ *
+ *  Accepts the same two shapes as {@link ColormapSpec}:
+ *    - string: looks up the canonical built-in table, falls back to viridis
+ *      with a one-time warn if not found.
+ *    - { stops }: explicit (position, hex) pairs, resampled to the grid.
+ */
+export function resolveColormap(spec: ColormapSpec | undefined): Float32Array {
+  // Built-in palette name → the canonical 256-entry table.
+  if (typeof spec === 'string') {
+    const table = PALETTES[spec];
+    if (table) return normaliseTable(table);
+    if (!_warnedUnknownPalettes.has(spec)) {
+      _warnedUnknownPalettes.add(spec);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[@mercator-blue/sdk] Unknown palette "${spec}" — ` +
+        `falling back to viridis. Available palettes: ${Object.keys(PALETTES).join(', ')}.`,
+      );
+    }
+    return normaliseTable(PALETTES.viridis);
+  }
+
+  // Customer { stops } spec → resample onto the COLORMAP_SIZE grid.
+  if (spec && Array.isArray(spec.stops)) {
+    const parsed: ParsedStop[] = (spec.stops as Colormap)
+      .map(([p, hex]): ParsedStop => [p, hexToRgb(hex)])
+      .sort((a, b) => a[0] - b[0]);
+    const out = new Float32Array(COLORMAP_SIZE * 3);
+    for (let i = 0; i < COLORMAP_SIZE; i++) {
+      const t = i / (COLORMAP_SIZE - 1);
+      const [r, g, b] = sampleStops(parsed, t);
+      out[i * 3 + 0] = r / 255;
+      out[i * 3 + 1] = g / 255;
+      out[i * 3 + 2] = b / 255;
+    }
+    return out;
+  }
+
+  return normaliseTable(PALETTES.viridis);
+}

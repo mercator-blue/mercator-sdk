@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>@mercator-blue/sdk — Mapbox GL JS smoke test</title>
+
+  <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.css" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.js"></script>
+
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; font-family: system-ui, sans-serif; }
+    #map { position: absolute; inset: 0; }
+    .panel {
+      position: absolute; top: 12px; left: 12px; z-index: 10;
+      background: rgba(255,255,255,0.96); padding: 12px 14px;
+      border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+      max-width: 320px; max-height: calc(100vh - 24px); overflow-y: auto;
+      font-size: 13px; line-height: 1.4;
+    }
+    .panel h1 { margin: 0 0 6px; font-size: 14px; }
+    .panel h2 { margin: 12px 0 4px; font-size: 12px; font-weight: 600;
+      color: #555; text-transform: uppercase; letter-spacing: 0.04em; }
+    .panel code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+    .panel small { color: #666; font-size: 11px; }
+    .panel .err { color: #b00; }
+    .panel input[type="text"] { width: 100%; padding: 4px; font-family: monospace; font-size: 11px; box-sizing: border-box; }
+    .panel select { width: 100%; padding: 4px; font-size: 12px; }
+    .panel button { padding: 4px 10px; cursor: pointer; font-size: 12px; }
+    .panel input[type="range"] { width: 100%; }
+    .row { margin-top: 6px; }
+    .row label { display: block; }
+    .row label.cb { display: flex; align-items: center; gap: 6px; }
+    .row.sub { padding-left: 12px; opacity: 0.95; }
+    .row .val { float: right; color: #666; font-variant-numeric: tabular-nums; }
+    hr { border: 0; border-top: 1px solid #ddd; margin: 12px 0 4px; }
+    .controls.disabled { opacity: 0.4; pointer-events: none; }
+    .zoom-readout {
+      position: absolute; top: 12px; right: 12px; z-index: 10;
+      background: rgba(255,255,255,0.92); padding: 6px 10px;
+      border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+      font: 13px/1.2 ui-monospace, Menlo, Consolas, monospace;
+      color: #222; min-width: 64px; text-align: right;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<div class="panel" id="panel">
+  <h1>SDK on Mapbox GL JS</h1>
+  <div id="status">Ready. Paste keys and pick a dataset.</div>
+
+  <h2>Setup</h2>
+  <div class="row">
+    <label><small>Mapbox access token (pk.…)</small></label>
+    <input id="token" type="text" placeholder="pk.eyJ1Ij…" />
+  </div>
+  <div class="row">
+    <label><small>mercator.blue API key (mk_…)</small></label>
+    <input id="apikey" type="text" placeholder="mk_xxxxxxxx.…" />
+  </div>
+  <div class="row">
+    <label><small>Dataset</small></label>
+    <select id="dataset">
+      <option value="wind10m">wind10m (vector)</option>
+      <option value="temp2m">temp2m (scalar)</option>
+      <option value="currents">currents (vector, ocean)</option>
+      <option value="cape">cape (scalar)</option>
+      <option value="elevation">elevation (scalar, static)</option>
+    </select>
+  </div>
+  <div class="row">
+    <label><small>Projection</small></label>
+    <select id="projection">
+      <option value="mercator">mercator (flat)</option>
+      <option value="globe">globe</option>
+    </select>
+  </div>
+  <div class="row">
+    <label><small>Basemap</small></label>
+    <select id="basemap">
+      <option value="standard-night">Standard (night)</option>
+      <option value="standard-day">Standard (day)</option>
+      <option value="standard-satellite">Standard Satellite</option>
+      <option value="dark-v11">Classic dark-v11</option>
+      <option value="light-v11">Classic light-v11</option>
+    </select>
+  </div>
+  <div class="row">
+    <button id="go">Load</button>
+    <small style="margin-left:8px;">URL hash preserves all settings.</small>
+  </div>
+
+  <!-- Control groups injected by mountControls() from ./controls.js. -->
+  <div id="controls" class="controls disabled"></div>
+</div>
+
+<div id="map"></div>
+<div id="zoom-readout" class="zoom-readout">z —</div>
+
+<script type="module">
+  import {
+    MercatorLayer,
+    discoverLatestItem,
+  } from '../dist/mapbox.js';
+  // Pull the actual palette presets from the SDK so the dropdown can't
+  // drift from what resolveColormap recognises. (Earlier version
+  // hard-coded names — half of them silently fell back to viridis.)
+  import { PALETTES } from '../dist/colormaps.js';
+  import { mountControls } from './controls.js';
+
+  // Render the shared control panel (markup + palette + value-readouts).
+  mountControls({
+    container: document.getElementById('controls'),
+    groups: ['raster', 'particles', 'arrows', 'values', 'contours', 'bounds'],
+    palettes: PALETTES,
+  });
+
+  const CATALOG_URL = 'https://api.mercator.blue/catalog.json';
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $('status');
+
+  // ---------- URL-hash state round-trip ----------
+  function readHash() {
+    const p = new URLSearchParams(location.hash.slice(1));
+    if (p.get('pk')) $('token').value = p.get('pk');
+    if (p.get('mk')) $('apikey').value = p.get('mk');
+    if (p.get('proj')) $('projection').value = p.get('proj');
+    if (p.get('ds')) $('dataset').value = p.get('ds');
+    if (p.get('bm')) $('basemap').value = p.get('bm');
+  }
+  function writeHash() {
+    const p = new URLSearchParams();
+    if ($('token').value) p.set('pk', $('token').value);
+    if ($('apikey').value) p.set('mk', $('apikey').value);
+    p.set('proj', $('projection').value);
+    p.set('ds', $('dataset').value);
+    p.set('bm', $('basemap').value);
+    location.hash = p.toString();
+  }
+  readHash();
+
+  /** Map basemap-dropdown value → (style URL, optional config). */
+  function basemapConfig(name) {
+    switch (name) {
+      case 'standard-night':
+        return {
+          style: 'mapbox://styles/mapbox/standard',
+          config: { basemap: { lightPreset: 'night' } },
+        };
+      case 'standard-day':
+        return {
+          style: 'mapbox://styles/mapbox/standard',
+          config: { basemap: { lightPreset: 'day' } },
+        };
+      case 'standard-satellite':
+        return { style: 'mapbox://styles/mapbox/standard-satellite' };
+      case 'dark-v11':
+        return { style: 'mapbox://styles/mapbox/dark-v11' };
+      case 'light-v11':
+        return { style: 'mapbox://styles/mapbox/light-v11' };
+      default:
+        return { style: 'mapbox://styles/mapbox/standard' };
+    }
+  }
+
+  // (slider value-readouts are wired by mountControls in ./controls.js)
+
+  // ---------- per-load state ----------
+  let map = null;
+  let datasetIsVector = false;
+  // Layer handles. Always nulled on remove so the next toggle ON
+  // rebuilds from current control values (avoids the onAdd state-reset
+  // bug where MapLibre/Mapbox re-init the layer's runtime state on
+  // re-add, losing user changes like palette or particle count).
+  let rasterLayer = null;
+  let particlesLayer = null;
+  let arrowsHandle = null;
+  let valuesHandle = null;
+  // Dataset-specific particle-speed base (mercator units per (m/s) per
+  // frame at z=0). Read from each item's mercator:visualization.
+  // particle_speed_scale — wind10m's is ~6e-5 (typical 10 m/s wind),
+  // currents is ~0.0036 (typical 0.5 m/s currents). The slider scales
+  // around this base; without per-dataset bases, currents particles
+  // appear motionless because wind's 6e-5 is ~60× too slow for them.
+  let particleSpeedScaleBase = 6e-5;
+  let contoursHandle = null;
+  let contoursPresets = null; // cached MercatorContour.presets for the slider
+  let boundsHandle = null;
+
+  // ---------- helpers ----------
+  /** First symbol-type layer id in the basemap, so we can insert
+   *  custom data layers below labels (which stay legible on top). */
+  function firstSymbolLayerId() {
+    if (!map) return undefined;
+    for (const layer of map.getStyle().layers || []) {
+      if (layer.type === 'symbol') return layer.id;
+    }
+    return undefined;
+  }
+
+  /** Canonical Z-stack (bottom → top):
+   *      basemap fills  <  raster  <  arrows  <  particles  <  basemap labels
+   *      tile-bounds-lines  <  tile-bounds-labels (both on top of everything).
+   *
+   *  beforeId is computed at add-time from what's currently on the map.
+   *  Once every layer in the stack is a custom WebGL layer (raster,
+   *  arrows, particles, tile-bounds-lines all are), Mapbox/MapLibre's
+   *  beforeId reliably positions them within the shared custom-layer
+   *  render pass — no post-add moveLayer reordering needed.
+   */
+  const ARROWS_LINE_LAYER_ID = '__debug_arrows_lines'; // matches LINES in arrows-overlay.js
+  const CONTOURS_BOTTOM_LAYER_ID = '__contours_lines_custom'; // single custom WebGL layer for contour lines (since v0.x.y)
+
+  function beforeIdForRaster() {
+    // Raster sits at the bottom of the data-overlay stack — everything
+    // (contours, arrows, particles, labels) goes above it.
+    if (map?.getLayer(CONTOURS_BOTTOM_LAYER_ID)) return CONTOURS_BOTTOM_LAYER_ID;
+    if (map?.getLayer(ARROWS_LINE_LAYER_ID)) return ARROWS_LINE_LAYER_ID;
+    if (particlesLayer && map.getLayer(particlesLayer.id)) return particlesLayer.id;
+    return firstSymbolLayerId();
+  }
+  function beforeIdForContours() {
+    // Contours above raster but below arrows / particles / labels.
+    if (map?.getLayer(ARROWS_LINE_LAYER_ID)) return ARROWS_LINE_LAYER_ID;
+    if (particlesLayer && map.getLayer(particlesLayer.id)) return particlesLayer.id;
+    return firstSymbolLayerId();
+  }
+  function beforeIdForArrows() {
+    if (particlesLayer && map.getLayer(particlesLayer.id)) return particlesLayer.id;
+    return firstSymbolLayerId();
+  }
+  function beforeIdForParticles() {
+    return firstSymbolLayerId();
+  }
+
+
+  // ---------- main load ----------
+  $('go').addEventListener('click', () => loadAll().catch(showErr));
+
+  async function loadAll() {
+    const token = $('token').value.trim();
+    const apiKey = $('apikey').value.trim();
+    if (!token.startsWith('pk.')) { showErr('Need a pk.… Mapbox token.'); return; }
+    if (!apiKey.startsWith('mk_')) { showErr('Need an mk_… mercator API key.'); return; }
+    writeHash();
+    statusEl.textContent = 'Initialising Mapbox map…';
+
+    if (map) {
+      map.remove();
+      rasterLayer = particlesLayer = null;
+      arrowsHandle = valuesHandle = contoursHandle = boundsHandle = null;
+      contoursPresets = null;
+    }
+    mapboxgl.accessToken = token;
+    const bm = basemapConfig($('basemap').value);
+    map = new mapboxgl.Map({
+      container: 'map',
+      style: bm.style,
+      ...(bm.config ? { config: bm.config } : {}),
+      center: [0, 20], zoom: 1.5,
+      projection: $('projection').value,
+    });
+    map.on('error', (e) => showErr(`Mapbox: ${e.error?.message ?? e}`));
+
+    await new Promise((res) => map.on('load', res));
+
+    // Live zoom readout in the top-right. `move` fires on every frame
+    // of smooth-zoom animations, so the value updates smoothly without
+    // a separate raf loop.
+    const zoomEl = $('zoom-readout');
+    const updateZoom = () => { zoomEl.textContent = `z ${map.getZoom().toFixed(2)}`; };
+    map.on('move', updateZoom);
+    updateZoom();
+
+    // Console-debug handle. The bare `map` global in DevTools refers
+    // to the <div id="map"> DOM element (HTML name-as-global rule);
+    // expose the Mapbox instance under a non-clashing name plus a
+    // tiny helper that summarises what the contour vector source
+    // currently has loaded — useful for diagnosing label dropouts.
+    window.mbmap = map;
+    window.contoursAtThisZoom = () => {
+      const fs = map.querySourceFeatures('__contours_src', { sourceLayer: 'contours' });
+      const byInterval = {};
+      for (const f of fs) {
+        const i = f.properties.interval;
+        byInterval[i] = (byInterval[i] || 0) + 1;
+      }
+      return {
+        zoom: +map.getZoom().toFixed(2),
+        total: fs.length,
+        byInterval,
+        sample: fs.slice(0, 3).map((f) => ({
+          value: f.properties.value,
+          interval: f.properties.interval,
+          geometry: f.geometry.type,
+        })),
+      };
+    };
+    statusEl.textContent = 'Map loaded. Discovering dataset…';
+
+    const dataset = $('dataset').value;
+    datasetIsVector = dataset === 'wind10m' || dataset === 'currents' || dataset === 'wind100m';
+
+    // Initial-paint defaults: vector datasets show particles, scalar
+    // datasets show raster.
+    $('show-particles').checked = datasetIsVector;
+    $('show-raster').checked = !datasetIsVector;
+    $('show-arrows').checked = false;
+    $('show-values').checked = false;
+    $('show-contours').checked = false;
+    $('show-bounds').checked = false;
+    // Reset interval slider state — populated lazily when contours toggle goes on.
+    $('interval').disabled = true;
+    $('interval-val').textContent = '—';
+
+    try {
+      if ($('show-raster').checked) await ensureRaster();
+      if (datasetIsVector && $('show-particles').checked) await ensureParticles();
+      $('controls').classList.remove('disabled');
+      statusEl.innerHTML = `Rendered <code>${dataset}</code> on Mapbox GL JS ${mapboxgl.version} (${$('projection').value}).`;
+    } catch (err) {
+      showErr(`SDK: ${err.message}`);
+      console.error(err);
+    }
+  }
+
+  // ---------- per-overlay toggle handlers ----------
+  // Each handler nulls the layer on remove, then rebuilds (reading
+  // current control values) on next add. This mirrors what the
+  // deployed site does, and avoids the onAdd state-reset bug that
+  // makes palette / particle settings vanish on re-add.
+
+  async function ensureRaster() {
+    const dataset = $('dataset').value;
+    const apiKey = $('apikey').value.trim();
+    rasterLayer = await MercatorLayer.create({
+      dataset, apiKey, catalogUrl: CATALOG_URL,
+      viz: 'raster',
+      id: `raster-${dataset}`,
+      colormap: $('palette').value,
+      opacity: (+$('opacity').value) / 100,
+      // Mapbox v3 Standard: pin to 'middle' so the raster sits below
+      // basemap labels AND below our contour labels (which go to
+      // 'top'). MapLibre + Mapbox classic ignore the slot; beforeId
+      // still determines ordering there.
+      slot: 'middle',
+      beforeId: beforeIdForRaster(),
+    });
+    rasterLayer.addTo(map);
+  }
+  async function removeRaster() {
+    if (rasterLayer) { rasterLayer.remove(); rasterLayer = null; }
+  }
+
+  async function ensureParticles() {
+    if (!datasetIsVector) return;
+    const dataset = $('dataset').value;
+    const apiKey = $('apikey').value.trim();
+    // Read the dataset's own particle_speed_scale from STAC so the
+    // slider's "1.0" mark matches the natural speed for that dataset.
+    const item = await discoverLatestItem(CATALOG_URL, dataset);
+    particleSpeedScaleBase = item.visualization?.particle_speed_scale ?? 6e-5;
+    particlesLayer = MercatorLayer.fromItem({
+      dataset, apiKey, catalogUrl: CATALOG_URL,
+      viz: 'streamlines',
+      id: `particles-${dataset}`,
+      particleCount: +$('count').value,
+      pointSize: +$('size').value,
+      speedScale: (+$('speed').value) * particleSpeedScaleBase,
+      maxAge: +$('age').value * 60,
+      fade: (+$('fade').value) / 100,
+      colorBySpeed: $('cbs').checked,
+      colormap: $('palette').value,
+      slot: 'middle',
+      beforeId: beforeIdForParticles(),
+    }, item);
+    particlesLayer.addTo(map);
+  }
+  async function removeParticles() {
+    if (particlesLayer) { particlesLayer.remove(); particlesLayer = null; }
+  }
+
+  async function ensureArrows() {
+    if (!datasetIsVector) return;
+    const dataset = $('dataset').value;
+    const apiKey = $('apikey').value.trim();
+    arrowsHandle = await MercatorLayer.create({
+      dataset, apiKey, catalogUrl: CATALOG_URL,
+      viz: 'arrows',
+      beforeId: beforeIdForArrows(),
+      slot: 'middle',
+    });
+    arrowsHandle.addTo(map);
+  }
+  function removeArrows() {
+    if (arrowsHandle) { arrowsHandle.remove(); arrowsHandle = null; }
+  }
+
+  async function ensureValues() {
+    const dataset = $('dataset').value;
+    const apiKey = $('apikey').value.trim();
+    // slot:'top' keeps the number labels above the data layers AND the
+    // basemap labels — they're the topmost thing on the map, like a
+    // forecast-site temperature grid.
+    valuesHandle = await MercatorLayer.create({
+      dataset, apiKey, catalogUrl: CATALOG_URL,
+      viz: 'values',
+      slot: 'top',
+    });
+    valuesHandle.addTo(map);
+  }
+  function removeValues() {
+    if (valuesHandle) { valuesHandle.remove(); valuesHandle = null; }
+  }
+
+  async function ensureContours() {
+    const dataset = $('dataset').value;
+    const apiKey = $('apikey').value.trim();
+    // Peek at item.contour.presets first so the interval slider can be
+    // populated with the dataset's actual buckets. Throws cleanly if the
+    // dataset isn't a scalar field with a contour pyramid.
+    const item = await discoverLatestItem(CATALOG_URL, dataset);
+    if (!item.contour) {
+      throw new Error(`dataset "${dataset}" has no contour pyramid published.`);
+    }
+    contoursPresets = item.contour.presets;
+    const initialIdx = Math.max(
+      0,
+      contoursPresets.indexOf(item.contour.default_interval),
+    );
+    const slider = $('interval');
+    slider.min = '0';
+    slider.max = String(contoursPresets.length - 1);
+    slider.step = '1';
+    slider.value = String(initialIdx);
+    slider.disabled = false;
+    $('interval-val').textContent = `${contoursPresets[initialIdx]} ${item.contour.unit}`;
+    contoursHandle = MercatorLayer.fromItem({
+      dataset, apiKey, catalogUrl: CATALOG_URL,
+      viz: 'contours',
+      initialInterval: contoursPresets[initialIdx],
+      beforeId: beforeIdForContours(),
+    }, item);
+    contoursHandle.addTo(map);
+  }
+  function removeContours() {
+    if (contoursHandle) { contoursHandle.remove(); contoursHandle = null; }
+    contoursPresets = null;
+    $('interval').disabled = true;
+    $('interval-val').textContent = '—';
+  }
+
+  async function ensureBounds() {
+    // No dataset/apiKey needed — bounds is a debug overlay over the slippy
+    // grid at the current map zoom.
+    boundsHandle = await MercatorLayer.create({ viz: 'bounds' });
+    boundsHandle.addTo(map);
+  }
+  function removeBounds() {
+    if (boundsHandle) { boundsHandle.remove(); boundsHandle = null; }
+  }
+
+  // ---------- wire toggles ----------
+  $('show-raster').addEventListener('change', async () => {
+    try {
+      if ($('show-raster').checked) {
+        if (!rasterLayer) await ensureRaster();
+      } else {
+        await removeRaster();
+      }
+    } catch (err) { showErr(err.message); console.error(err); }
+  });
+  $('show-particles').addEventListener('change', async () => {
+    try {
+      if ($('show-particles').checked) {
+        if (!particlesLayer) await ensureParticles();
+      } else {
+        await removeParticles();
+      }
+    } catch (err) { showErr(err.message); console.error(err); }
+  });
+  $('show-arrows').addEventListener('change', async () => {
+    try {
+      if ($('show-arrows').checked) {
+        if (!arrowsHandle) await ensureArrows();
+      } else {
+        removeArrows();
+      }
+    } catch (err) { showErr(err.message); console.error(err); }
+  });
+  $('show-values').addEventListener('change', async () => {
+    try {
+      if ($('show-values').checked) {
+        if (!valuesHandle) await ensureValues();
+      } else {
+        removeValues();
+      }
+    } catch (err) { showErr(err.message); console.error(err); }
+  });
+  $('show-contours').addEventListener('change', async () => {
+    try {
+      if ($('show-contours').checked) {
+        if (!contoursHandle) await ensureContours();
+      } else {
+        removeContours();
+      }
+    } catch (err) {
+      showErr(err.message); console.error(err);
+      // Roll the checkbox back so a failed enable doesn't read as enabled.
+      $('show-contours').checked = false;
+    }
+  });
+  $('interval').addEventListener('input', () => {
+    if (!contoursHandle || !contoursPresets) return;
+    const idx = +$('interval').value;
+    const v = contoursPresets[idx];
+    contoursHandle.setOptions({ initialInterval: v });
+    // Unit follows the discovered item — append it for legibility.
+    const unitSuffix = $('interval-val').textContent.replace(/^[-\d.]+\s*/, '');
+    $('interval-val').textContent = `${v} ${unitSuffix}`.trim();
+  });
+  $('show-bounds').addEventListener('change', async () => {
+    try {
+      if ($('show-bounds').checked) {
+        if (!boundsHandle) await ensureBounds();
+      } else {
+        removeBounds();
+      }
+    } catch (err) { showErr(err.message); console.error(err); }
+  });
+
+  // ---------- live setters (when the relevant layer exists) ----------
+  $('opacity').addEventListener('input', () => {
+    if (rasterLayer) rasterLayer.setOptions({ opacity: (+$('opacity').value) / 100 });
+  });
+  $('palette').addEventListener('change', () => {
+    if (rasterLayer) rasterLayer.setOptions({ colormap: $('palette').value });
+    if (particlesLayer) particlesLayer.setOptions({ colormap: $('palette').value });
+  });
+  $('count').addEventListener('input', () => {
+    if (particlesLayer) particlesLayer.setOptions({ particleCount: +$('count').value });
+  });
+  $('size').addEventListener('input', () => {
+    if (particlesLayer) particlesLayer.setOptions({ pointSize: +$('size').value });
+  });
+  $('speed').addEventListener('input', () => {
+    if (particlesLayer) particlesLayer.setOptions({ speedScale: (+$('speed').value) * particleSpeedScaleBase });
+  });
+  $('age').addEventListener('input', () => {
+    if (particlesLayer) particlesLayer.setOptions({ maxAge: (+$('age').value) * 60 });
+  });
+  $('fade').addEventListener('input', () => {
+    if (particlesLayer) particlesLayer.setOptions({ fade: (+$('fade').value) / 100 });
+  });
+  $('cbs').addEventListener('change', () => {
+    if (particlesLayer) particlesLayer.setOptions({ colorBySpeed: $('cbs').checked });
+  });
+
+  function showErr(msg) {
+    statusEl.innerHTML = `<span class="err">${msg}</span>`;
+  }
+</script>
+
+</body>
+</html>

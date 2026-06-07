@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>@mercator-blue/sdk — Leaflet smoke test</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; font-family: system-ui, sans-serif; }
+    #map { position: absolute; inset: 0; }
+    .panel {
+      position: absolute; top: 12px; left: 12px; z-index: 1000;
+      background: rgba(255,255,255,0.96); padding: 12px 14px;
+      border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+      max-width: 320px; max-height: calc(100vh - 24px); overflow-y: auto;
+      font-size: 13px; line-height: 1.4;
+    }
+    .panel h1 { margin: 0 0 6px; font-size: 14px; }
+    .panel h2 { margin: 12px 0 4px; font-size: 12px; font-weight: 600;
+      color: #555; text-transform: uppercase; letter-spacing: 0.04em; }
+    .panel code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+    .panel small { color: #666; font-size: 11px; }
+    .panel .err { color: #b00; }
+    .panel input[type="text"] { width: 100%; padding: 4px; font-family: monospace; font-size: 11px; box-sizing: border-box; }
+    .panel select { width: 100%; padding: 4px; font-size: 12px; }
+    .panel button { padding: 4px 10px; cursor: pointer; font-size: 12px; }
+    .panel input[type="range"] { width: 100%; }
+    .row { margin-top: 6px; }
+    .row label { display: block; }
+    .row label.cb { display: flex; align-items: center; gap: 6px; }
+    .row.sub { padding-left: 12px; opacity: 0.95; }
+    .row .val { float: right; color: #666; font-variant-numeric: tabular-nums; }
+    hr { border: 0; border-top: 1px solid #ddd; margin: 12px 0 4px; }
+    .controls.disabled { opacity: 0.4; pointer-events: none; }
+    .zoom-readout {
+      position: absolute; top: 12px; right: 12px; z-index: 1000;
+      background: rgba(255,255,255,0.92); padding: 6px 10px;
+      border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+      font: 13px/1.2 ui-monospace, Menlo, Consolas, monospace;
+      color: #222; min-width: 64px; text-align: right;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<div class="panel" id="panel">
+  <h1>SDK on Leaflet</h1>
+  <div id="status">Ready. Paste your API key and pick a dataset.</div>
+
+  <h2>Setup</h2>
+  <div class="row">
+    <label><small>mercator.blue API key (mk_…)</small></label>
+    <input id="apikey" type="text" placeholder="mk_xxxxxxxx.…" />
+  </div>
+  <div class="row">
+    <label><small>Dataset</small></label>
+    <select id="dataset">
+      <option value="temp2m">temp2m (scalar)</option>
+      <option value="cape">cape (scalar)</option>
+      <option value="wind10m">wind10m (vector magnitude)</option>
+      <option value="currents">currents (vector magnitude, ocean)</option>
+      <option value="elevation">elevation (static, hypsometric)</option>
+    </select>
+  </div>
+  <div class="row">
+    <label><small>Basemap</small></label>
+    <select id="basemap">
+      <option value="positron">Positron (light)</option>
+      <option value="liberty">Liberty (Voyager)</option>
+      <option value="bright">Bright (OSM)</option>
+      <option value="dark">Dark</option>
+      <option value="satellite">Satellite (NASA Blue Marble)</option>
+    </select>
+  </div>
+  <div class="row">
+    <button id="go">Load</button>
+    <small style="margin-left:8px;">URL hash preserves settings.</small>
+  </div>
+
+  <!-- Control groups injected by mountControls() from ./controls.js. -->
+  <div id="controls" class="controls disabled"></div>
+
+  <h2>Notes</h2>
+  <small>
+    Leaflet binding: raster, particles, arrows, value labels, contours, tile-boundaries.
+    Pan is synced with the basemap via the overlay pane's CSS transform;
+    zoom scale-transforms then redraws on zoom end.
+  </small>
+</div>
+
+<div id="map"></div>
+<div id="zoom-readout" class="zoom-readout">z —</div>
+
+<script type="module">
+  import {
+    MercatorLayer,
+    discoverLatestItem,
+  } from '../dist/leaflet.js';
+  import { PALETTES } from '../dist/colormaps.js';
+  import { mountControls } from './controls.js';
+
+  // Render the shared control panel. Leaflet gets the `smooth` raster
+  // option. count default 8000 like Mapbox/MapLibre. The contours group's
+  // interval slider is populated per-dataset from STAC after discovery.
+  mountControls({
+    container: document.getElementById('controls'),
+    groups: ['raster', 'particles', 'arrows', 'values', 'contours', 'bounds'],
+    palettes: PALETTES,
+    raster: { smooth: true },
+  });
+
+  const CATALOG_URL = 'https://api.mercator.blue/catalog.json';
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $('status');
+
+  // ---------- URL-hash state round-trip ----------
+  function readHash() {
+    const p = new URLSearchParams(location.hash.slice(1));
+    if (p.get('mk')) $('apikey').value = p.get('mk');
+    if (p.get('ds')) $('dataset').value = p.get('ds');
+    if (p.get('pal')) $('palette').value = p.get('pal');
+    if (p.get('bm')) $('basemap').value = p.get('bm');
+  }
+  function writeHash() {
+    const p = new URLSearchParams();
+    if ($('apikey').value) p.set('mk', $('apikey').value);
+    p.set('ds', $('dataset').value);
+    p.set('pal', $('palette').value);
+    p.set('bm', $('basemap').value);
+    location.hash = p.toString();
+  }
+  readHash();
+
+  // ---------- basemaps ----------
+  // Leaflet is raster-only (no vector-tile renderer), so the OpenFreeMap
+  // vector styles the MapLibre demo uses aren't directly consumable here.
+  // We mirror the SAME option set with raster equivalents: CARTO's raster
+  // basemaps (the raster cousins of Positron / Dark Matter / Voyager) for
+  // the vector-style choices, OSM standard for "bright", and the identical
+  // NASA GIBS imagery for the satellite option. Satellite has no place
+  // labels here (the MapLibre demo borrows Positron's label layers — a
+  // vector-renderer nicety Leaflet can't replicate without a GL plugin).
+  function leafletBasemap(name) {
+    const carto = (style) => L.tileLayer(
+      `https://{s}.basemaps.cartocdn.com/${style}/{z}/{x}/{y}{r}.png`,
+      {
+        subdomains: 'abcd', maxZoom: 20,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      },
+    );
+    const GIBS_ATTR = 'Imagery &copy; <a href="https://earthdata.nasa.gov/eosdis/gibs">NASA EOSDIS GIBS</a>';
+    // GIBS uses {z}/{y}/{x} order; Leaflet substitutes named placeholders
+    // so the order in the template is preserved. maxNativeZoom lets Leaflet
+    // overzoom past the imagery's native resolution (matches MapLibre's
+    // display maxzoom: 19).
+    const gibs = (tiles, maxNative, extra) => L.tileLayer(tiles, {
+      maxNativeZoom: maxNative, maxZoom: 19, tileSize: 256,
+      attribution: `${GIBS_ATTR} ${extra}`,
+    });
+    switch (name) {
+      case 'liberty':  return carto('rastertiles/voyager');
+      case 'bright':   return L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      });
+      case 'dark':     return carto('dark_all');
+      case 'satellite': return gibs(
+        'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_NextGeneration/default/2004-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg',
+        8, '(Blue Marble)',
+      );
+      case 'positron':
+      default:         return carto('light_all');
+    }
+  }
+
+  // ---------- per-load state ----------
+  let map = null;
+  let rasterLayer = null;
+  let arrowsLayer = null;
+  let particlesLayer = null;
+  let tileBoundsLayer = null;
+  let contoursLayer = null;
+  let valuesLayer = null;
+  let basemap = null;
+  let currentDataset = null;
+  let currentApiKey = null;
+  let currentItem = null;
+  // Sorted contour preset values for the current dataset (from STAC);
+  // the interval slider indexes into this. null when the dataset has no
+  // contour pyramid (vector datasets).
+  let contourPresets = null;
+  // Dataset-specific particle-speed base from STAC (mercator units per
+  // (m/s) per frame at z=0). Wind10m is ~6e-5, currents is ~3.6e-3.
+  // The "Speed ×base" slider multiplies this; without per-dataset bases
+  // currents particles would barely move at the slider's 1× default.
+  let particleSpeedScaleBase = 6e-5;
+
+  // (slider value-readouts are wired by mountControls in ./controls.js)
+
+  // ---------- main load ----------
+  $('go').addEventListener('click', () => loadAll().catch(showErr));
+
+  async function loadAll() {
+    const apiKey = $('apikey').value.trim();
+    if (!apiKey.startsWith('mk_')) { showErr('Need an mk_… mercator API key.'); return; }
+    writeHash();
+    statusEl.textContent = 'Initialising Leaflet map…';
+
+    if (map) {
+      map.remove();
+      map = null;
+      rasterLayer = null;
+      arrowsLayer = null;
+      particlesLayer = null;
+      tileBoundsLayer = null;
+      contoursLayer = null;
+      valuesLayer = null;
+    }
+
+    map = L.map('map', {
+      worldCopyJump: false,
+      zoomAnimation: true,
+    }).setView([20, 0], 2);
+
+    basemap = leafletBasemap($('basemap').value).addTo(map);
+
+    // Live zoom readout.
+    const zoomEl = $('zoom-readout');
+    const updateZoom = () => { zoomEl.textContent = `z ${map.getZoom().toFixed(2)}`; };
+    map.on('zoom', updateZoom);
+    updateZoom();
+
+    // Console-debug handle.
+    window.lmap = map;
+
+    statusEl.textContent = 'Map loaded. Discovering dataset…';
+
+    const dataset = $('dataset').value;
+    try {
+      // Discover once — raster + arrows + particles all build from the
+      // same item via `fromItem`. Lets us read the dataset's STAC
+      // particle_speed_scale BEFORE constructing the streamlines layer.
+      currentItem = await discoverLatestItem(CATALOG_URL, dataset);
+      particleSpeedScaleBase = currentItem.visualization?.particle_speed_scale ?? 6e-5;
+      currentDataset = dataset;
+      currentApiKey = apiKey;
+
+      // Default overlay selection per dataset kind (matches maplibre/
+      // mapbox/deck): colour overlay for scalar/elevation, particles for
+      // vector — so vector datasets still show motion with raster off.
+      const isVector = currentItem.encoding.kind === 'vector_rg_ba';
+      $('show-raster').checked = !isVector;
+      $('show-particles').checked = isVector;
+
+      // Populate the contour interval slider from STAC (or disable the
+      // group for datasets with no contour pyramid).
+      setupContoursControl();
+
+      // Add overlays whose checkboxes are now on.
+      if ($('show-raster').checked) {
+        addRasterLayer();
+      }
+      if ($('show-particles').checked) {
+        addParticlesLayer();
+      }
+      if ($('show-arrows').checked) {
+        addArrowsLayer();
+      }
+      if ($('show-values').checked) {
+        addValuesLayer();
+      }
+      if ($('show-bounds').checked) {
+        tileBoundsLayer = await MercatorLayer.create({ viz: 'bounds' });
+        tileBoundsLayer.addTo(map);
+      }
+
+      $('controls').classList.remove('disabled');
+      statusEl.innerHTML = `Rendered <code>${dataset}</code> on Leaflet ${L.version}.`;
+    } catch (err) {
+      showErr(`SDK: ${err.message}`);
+      console.error(err);
+    }
+  }
+
+  // ---------- raster toggle + live setters ----------
+  function addRasterLayer() {
+    if (!map || !currentItem || !currentApiKey) return;
+    rasterLayer = MercatorLayer.fromItem({
+      dataset: currentDataset,
+      apiKey: currentApiKey,
+      catalogUrl: CATALOG_URL,
+      viz: 'raster',
+      colormap: $('palette').value,
+      opacity: (+$('opacity').value) / 100,
+      smooth: $('smooth').checked,
+    }, currentItem);
+    rasterLayer.addTo(map);
+  }
+  $('show-raster').addEventListener('change', () => {
+    if (!map) return;
+    if ($('show-raster').checked && !rasterLayer) {
+      addRasterLayer();
+    } else if (!$('show-raster').checked && rasterLayer) {
+      map.removeLayer(rasterLayer);
+      rasterLayer = null;
+    }
+  });
+  $('palette').addEventListener('change', () => {
+    writeHash();
+    if (rasterLayer) rasterLayer.setColormap($('palette').value);
+    if (particlesLayer) particlesLayer.setColormap($('palette').value);
+  });
+  $('opacity').addEventListener('input', () => {
+    // (readout updated by mountControls; we just apply the value)
+    if (rasterLayer) rasterLayer.setOpacity((+$('opacity').value) / 100);
+  });
+  $('smooth').addEventListener('change', () => {
+    if (rasterLayer) rasterLayer.setSmooth($('smooth').checked);
+  });
+  function addParticlesLayer() {
+    if (!map || !currentItem || !currentApiKey) return;
+    try {
+      particlesLayer = MercatorLayer.fromItem({
+        dataset: currentDataset,
+        apiKey: currentApiKey,
+        catalogUrl: CATALOG_URL,
+        viz: 'streamlines',
+        particleCount: +$('count').value,
+        pointSize: +$('size').value,
+        speedScale: (+$('speed').value) * particleSpeedScaleBase,
+        maxAge: (+$('age').value) * 60,
+        fade: (+$('fade').value) / 100,
+        colorBySpeed: $('cbs').checked,
+        colormap: $('palette').value,
+      }, currentItem);
+      particlesLayer.addTo(map);
+    } catch (err) {
+      // Most likely: dataset isn't vector_rg_ba.
+      $('show-particles').checked = false;
+      showErr(`Particles: ${err.message}`);
+    }
+  }
+  $('show-particles').addEventListener('change', () => {
+    if (!map) return;
+    if ($('show-particles').checked && !particlesLayer) {
+      addParticlesLayer();
+    } else if (!$('show-particles').checked && particlesLayer) {
+      map.removeLayer(particlesLayer);
+      particlesLayer = null;
+    }
+  });
+  $('count').addEventListener('change', () => {
+    if (particlesLayer) particlesLayer.setParticleCount(+$('count').value);
+  });
+  $('size').addEventListener('input', () => {
+    if (particlesLayer) particlesLayer.setPointSize(+$('size').value);
+  });
+  $('speed').addEventListener('input', () => {
+    if (particlesLayer) particlesLayer.setSpeedScale((+$('speed').value) * particleSpeedScaleBase);
+  });
+  $('age').addEventListener('change', () => {
+    if (particlesLayer) particlesLayer.setMaxAge((+$('age').value) * 60);
+  });
+  $('fade').addEventListener('input', () => {
+    if (particlesLayer) particlesLayer.setFade((+$('fade').value) / 100);
+  });
+  $('cbs').addEventListener('change', () => {
+    if (particlesLayer) particlesLayer.setColorBySpeed($('cbs').checked);
+  });
+
+  function addArrowsLayer() {
+    if (!map || !currentItem || !currentApiKey) return;
+    try {
+      arrowsLayer = MercatorLayer.fromItem({
+        dataset: currentDataset,
+        apiKey: currentApiKey,
+        catalogUrl: CATALOG_URL,
+        viz: 'arrows',
+      }, currentItem);
+      arrowsLayer.addTo(map);
+    } catch (err) {
+      // Most likely: dataset isn't vector_rg_ba.
+      $('show-arrows').checked = false;
+      showErr(`Arrows: ${err.message}`);
+    }
+  }
+  $('show-arrows').addEventListener('change', () => {
+    if (!map) return;
+    if ($('show-arrows').checked && !arrowsLayer) {
+      addArrowsLayer();
+    } else if (!$('show-arrows').checked && arrowsLayer) {
+      map.removeLayer(arrowsLayer);
+      arrowsLayer = null;
+    }
+  });
+
+  function addValuesLayer() {
+    if (!map || !currentItem || !currentApiKey) return;
+    try {
+      valuesLayer = MercatorLayer.fromItem({
+        dataset: currentDataset,
+        apiKey: currentApiKey,
+        catalogUrl: CATALOG_URL,
+        viz: 'values',
+      }, currentItem);
+      valuesLayer.addTo(map);
+    } catch (err) {
+      // Most likely: unsupported encoding (e.g. elevation's mapbox_rgb).
+      $('show-values').checked = false;
+      showErr(`Value labels: ${err.message}`);
+    }
+  }
+  $('show-values').addEventListener('change', () => {
+    if (!map) return;
+    if ($('show-values').checked && !valuesLayer) {
+      addValuesLayer();
+    } else if (!$('show-values').checked && valuesLayer) {
+      map.removeLayer(valuesLayer);
+      valuesLayer = null;
+    }
+  });
+  $('show-bounds').addEventListener('change', async () => {
+    if (!map) return;
+    if ($('show-bounds').checked && !tileBoundsLayer) {
+      tileBoundsLayer = await MercatorLayer.create({ viz: 'bounds' });
+      tileBoundsLayer.addTo(map);
+    } else if (!$('show-bounds').checked && tileBoundsLayer) {
+      map.removeLayer(tileBoundsLayer);
+      tileBoundsLayer = null;
+    }
+  });
+
+  // ---------- contours ----------
+  // Populate (or disable) the interval slider for the loaded dataset. The
+  // slider indexes into the sorted preset list; the readout shows the
+  // actual preset value + unit.
+  function setupContoursControl() {
+    const cb = $('show-contours');
+    const slider = $('interval');
+    const val = $('interval-val');
+    const c = currentItem && currentItem.contour;
+    if (!c || !Array.isArray(c.presets) || c.presets.length === 0) {
+      contourPresets = null;
+      cb.checked = false; cb.disabled = true;
+      slider.disabled = true; slider.min = 0; slider.max = 0; slider.value = 0;
+      val.textContent = '—';
+      return;
+    }
+    contourPresets = c.presets.slice().sort((a, b) => a - b);
+    let idx = contourPresets.indexOf(c.default_interval);
+    if (idx < 0) idx = 0;
+    cb.disabled = false;
+    slider.disabled = false;
+    slider.min = 0; slider.max = contourPresets.length - 1; slider.step = 1; slider.value = idx;
+    val.textContent = `${contourPresets[idx]}${c.unit || ''}`;
+  }
+
+  function addContoursLayer() {
+    if (!map || !currentItem || !currentApiKey) return;
+    try {
+      const iv = contourPresets ? contourPresets[+$('interval').value] : undefined;
+      contoursLayer = MercatorLayer.fromItem({
+        dataset: currentDataset,
+        apiKey: currentApiKey,
+        catalogUrl: CATALOG_URL,
+        viz: 'contours',
+        initialInterval: iv,
+      }, currentItem);
+      contoursLayer.addTo(map);
+    } catch (err) {
+      // Most likely: dataset has no contour pyramid.
+      $('show-contours').checked = false;
+      showErr(`Contours: ${err.message}`);
+    }
+  }
+  $('show-contours').addEventListener('change', () => {
+    if (!map) return;
+    if ($('show-contours').checked && !contoursLayer) {
+      addContoursLayer();
+    } else if (!$('show-contours').checked && contoursLayer) {
+      map.removeLayer(contoursLayer);
+      contoursLayer = null;
+    }
+  });
+  $('interval').addEventListener('input', () => {
+    if (!contourPresets) return;
+    const iv = contourPresets[+$('interval').value];
+    $('interval-val').textContent = `${iv}${(currentItem && currentItem.contour && currentItem.contour.unit) || ''}`;
+    if (contoursLayer) contoursLayer.setInterval(iv);
+  });
+
+  function showErr(msg) {
+    statusEl.innerHTML = `<span class="err">${msg}</span>`;
+  }
+</script>
+
+</body>
+</html>
