@@ -5,6 +5,14 @@ All notable changes to `@mercator-blue/sdk` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-06-08
+
+### Added
+
+- `@mercator-blue/sdk/react/mapbox` and `@mercator-blue/sdk/react/maplibre`: declarative `<MercatorLayer/>` components for [react-map-gl](https://visgl.github.io/react-map-gl/), one per host entry. They read the map from react-map-gl's `<Map>` context and manage the imperative layer's create / add / update / remove lifecycle. Identity props (`viz`, `dataset`, `apiKey`, `id`, `catalogUrl`, `beforeId`) rebuild the layer; every other prop change applies live via `setOptions`. Re-attaches on basemap/style swaps.
+- `@mercator-blue/sdk/react`: host-agnostic `useMercatorLayer(map, props)` hook — the primitive the components are built on, usable with any React map setup that can hand you the underlying map instance.
+- `react` and `react-map-gl` added as optional peer dependencies.
+
 ## [0.1.0] — 2026-06-07
 
 Initial public release.

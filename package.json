@@ -1,6 +1,6 @@
 {
   "name": "@mercator-blue/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Drop-in WebGL map layers for gridded earth data (weather, ocean, air quality, elevation) served by mercator.blue. MapLibre, Mapbox GL JS, Leaflet, OpenLayers, deck.gl.",
   "license": "Apache-2.0",
   "type": "module",
@@ -45,6 +45,21 @@
       "types": "./dist/colormaps.d.ts",
       "import": "./dist/colormaps.js",
       "require": "./dist/colormaps.cjs"
+    },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "import": "./dist/react/index.js",
+      "require": "./dist/react/index.cjs"
+    },
+    "./react/mapbox": {
+      "types": "./dist/react/mapbox.d.ts",
+      "import": "./dist/react/mapbox.js",
+      "require": "./dist/react/mapbox.cjs"
+    },
+    "./react/maplibre": {
+      "types": "./dist/react/maplibre.d.ts",
+      "import": "./dist/react/maplibre.js",
+      "require": "./dist/react/maplibre.cjs"
     }
   },
   "sideEffects": [
@@ -90,7 +105,11 @@
     "@deck.gl/mapbox": "^9.1.0",
     "@luma.gl/core": "^9.1.0",
     "@luma.gl/engine": "^9.1.0",
+    "@types/react": "^18.3.0",
     "ol": "^10.0.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-map-gl": "^8.0.0",
     "tsup": "^8.3.5",
     "typescript": "^6.0.3"
   },
@@ -104,9 +123,17 @@
     "maplibre-gl": ">=4.0.0",
     "@deck.gl/core": ">=9.0.0",
     "@deck.gl/layers": ">=9.0.0",
-    "ol": ">=8.0.0"
+    "ol": ">=8.0.0",
+    "react": ">=18.0.0",
+    "react-map-gl": ">=7.1.0"
   },
   "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-map-gl": {
+      "optional": true
+    },
     "maplibre-gl": {
       "optional": true
     },

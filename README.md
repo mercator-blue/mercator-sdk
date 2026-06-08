@@ -40,6 +40,28 @@ The layer walks the STAC catalog at request time, finds the latest cycle for
 dataset `wind10m`, fetches value-encoded tiles, decodes them in a fragment 
 shader and finally animates particle trails over the resulting vector field.
 
+### React (react-map-gl)
+
+Using [react-map-gl](https://visgl.github.io/react-map-gl/)? Drop in the
+declarative `<MercatorLayer/>` — it owns the imperative layer's lifecycle
+(create / add / update / remove) for you:
+
+```tsx
+import { Map } from 'react-map-gl/maplibre';
+import { MercatorLayer } from '@mercator-blue/sdk/react/maplibre';
+
+<Map
+  initialViewState={{ longitude: 0, latitude: 20, zoom: 2 }}
+  mapStyle="https://tiles.openfreemap.org/styles/liberty"
+>
+  <MercatorLayer apiKey="mk_..." dataset="wind10m" viz="streamlines" />
+</Map>;
+```
+
+Use `@mercator-blue/sdk/react/mapbox` for react-map-gl's Mapbox entry — one
+binding covers both hosts. There's also a host-agnostic `useMercatorLayer(map,
+props)` hook (from `@mercator-blue/sdk/react`) for any other React map setup.
+
 Full per-binding examples (including raster, contours, arrows, value labels, 
 and tile boundaries) are on the quickstart pages:
 
@@ -48,6 +70,7 @@ and tile boundaries) are on the quickstart pages:
 - [Leaflet](https://mercator.blue/quickstart/leaflet/): the classic raster-tile mapping library, Mercator-only.
 - [OpenLayers](https://mercator.blue/quickstart/openlayers/): OL 9+, Mercator-only, raster decoding uses OL's built-in `WebGLTile` band expressions.
 - [deck.gl](https://mercator.blue/quickstart/deck-gl/): deck.gl 9+ via `@deck.gl/mapbox`'s `MapboxOverlay`, flat Mercator only.
+- [React (react-map-gl)](https://mercator.blue/quickstart/react/): declarative `<MercatorLayer/>` for react-map-gl, on both MapLibre and Mapbox.
 
 ## Host library support
 
@@ -61,6 +84,8 @@ and tile boundaries) are on the quickstart pages:
 | **OpenLayers** (10+) | `/openlayers` | ✅ | — | raster, streamlines, arrows, contours, value-labels, tile-boundaries |
 
 The Mapbox/MapLibre binding is the only one with globe support (globe rendering depends on the host's projection system, and only Mapbox v3 and MapLibre 5 expose the projection pipeline to custom layers). The other bindings render flat Mercator regardless of host projection.
+
+For React apps, `@mercator-blue/sdk/react/mapbox` and `@mercator-blue/sdk/react/maplibre` wrap the Mapbox/MapLibre binding as a declarative `<MercatorLayer/>` for [react-map-gl](https://visgl.github.io/react-map-gl/) — same visualizations and globe support, both hosts. A host-agnostic `useMercatorLayer(map, props)` hook is exported from `@mercator-blue/sdk/react` for other React map setups.
 
 We don't have a binding for all libraries (Google Maps, Cesium, ArcGIS, etc). For these,
 or for any custom renderer, implement the [value-encoded PNG protocol](https://mercator.blue/docs#tag/tile-encoding) directly - it is a modest piece of GLSL code.
