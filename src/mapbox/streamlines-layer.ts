@@ -123,10 +123,15 @@ interface Viewport {
 interface Particle {
   mx: number;
   my: number;
+  /** Previous-frame position. The segment renderer draws prev→cur as one
+   *  continuous quad, so trails never gap regardless of speed. Seeded equal
+   *  to mx/my (a fresh particle's first segment is a zero-length dot). */
+  pmx: number;
+  pmy: number;
   age: number;
-  /** 0 = live (in-bounds, valid sample). -1 = "dead" sentinel that
-   *  collapses to zero pointSize in the vertex shader. > 0 = computed
-   *  m/s magnitude from the last sample. */
+  /** 0 = live (in-bounds, valid sample). -1 = "dead" sentinel that culls the
+   *  whole instance in the vertex shader. > 0 = computed m/s magnitude from
+   *  the last sample (drives color-by-speed; NOT affected by the step clamp). */
   speed: number;
 }
 
@@ -192,12 +197,15 @@ interface StreamlinesLayerThis {
   fadeProgram: WebGLProgram;
   compositeProgram: WebGLProgram;
 
-  pointsAttrPos: GLint;
+  pointsAttrPrev: GLint;
+  pointsAttrCur: GLint;
   pointsAttrSpeed: GLint;
+  pointsAttrCorner: GLint;
   pointsUOrigin: WebGLUniformLocation | null;
   pointsUOriginClip: WebGLUniformLocation | null;
   pointsUOpacity: WebGLUniformLocation | null;
-  pointsUSize: WebGLUniformLocation | null;
+  pointsUViewport: WebGLUniformLocation | null;
+  pointsULineWidth: WebGLUniformLocation | null;
   pointsUVmin: WebGLUniformLocation | null;
   pointsUVmax: WebGLUniformLocation | null;
   pointsUColorBySpeed: WebGLUniformLocation | null;
@@ -219,9 +227,12 @@ interface StreamlinesLayerThis {
   compositeUTex: WebGLUniformLocation | null;
   compositeUOpacity: WebGLUniformLocation | null;
 
-  // CPU-side vertex buffer + GPU mirror.
+  // CPU-side per-instance buffer (5 floats/particle: prevDx, prevDy, curDx,
+  // curDy, speed) + its GPU mirror, plus the static 6-vertex corner buffer
+  // that the instanced draw expands into a quad.
   vertData: Float32Array;
   pointsVbo: WebGLBuffer | null;
+  cornerVbo: WebGLBuffer | null;
   quadVbo: WebGLBuffer | null;
   coordOrigin?: [number, number];
 
@@ -278,6 +289,19 @@ interface StreamlinesLayerThis {
  * Build a MapLibre custom layer that animates wind particles from a vector
  * tile pyramid.
  */
+// Per-frame step floor, in device pixels. Slower particles are sped up to
+// this (preserving direction) so calm regions still drift visibly instead of
+// sitting still and popping out; genuine zero stays zero. There is no max
+// counterpart — segment quads make trails continuous at any speed.
+//
+// Must be a meaningful fraction of the line width (~pointSize px), not a
+// hair: at 0.1 the per-frame move is ~1/30 of the mark and the trail fade
+// leaves only a ~10px streak that shifts imperceptibly, so calm particles
+// read as static dots that appear and vanish. ~0.5 gives a ~50px fading
+// streak that clearly drifts. Tune up toward ~1 for livelier calm regions,
+// down for stiller ones.
+const MIN_STEP_PIXELS = 0.5;
+
 export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
   const MAX_Z = opts.maxzoom ?? 5;
   const LANDMASK_MAX_Z = opts.landmaskMaxZ ?? MAX_Z;
@@ -332,10 +356,21 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       this.compositeUTex = gl.getUniformLocation(this.compositeProgram, 'u_tex');
       this.compositeUOpacity = gl.getUniformLocation(this.compositeProgram, 'u_opacity');
 
-      this.vertData = new Float32Array(this.N * 3);
+      this.vertData = new Float32Array(this.N * 5);
       this.pointsVbo = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, this.pointsVbo);
       gl.bufferData(gl.ARRAY_BUFFER, this.vertData.byteLength, gl.DYNAMIC_DRAW);
+
+      // Static per-vertex corner buffer: the two triangles of a unit quad,
+      // each vertex carrying (end, side) — end 0=prev / 1=cur endpoint, side
+      // -1/+1 across the width. The instanced draw expands these against each
+      // particle's prev/cur into a screen-space segment quad.
+      this.cornerVbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerVbo);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        0, -1,   0, 1,   1, -1,
+        1, -1,   0, 1,   1, 1,
+      ]), gl.STATIC_DRAW);
 
       this.quadVbo = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, this.quadVbo);
@@ -371,6 +406,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
 
     onRemove(this: StreamlinesLayerThis, _map: unknown, gl: WebGL2RenderingContext): void {
       if (this.pointsVbo) gl.deleteBuffer(this.pointsVbo);
+      if (this.cornerVbo) gl.deleteBuffer(this.cornerVbo);
       if (this.quadVbo) gl.deleteBuffer(this.quadVbo);
       if (this.pointsProgram) gl.deleteProgram(this.pointsProgram);
       gl.deleteProgram(this.fadeProgram);
@@ -449,7 +485,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       n = Math.max(1, Math.floor(n));
       if (n === this.N) return;
       this.N = n;
-      this.vertData = new Float32Array(n * 3);
+      this.vertData = new Float32Array(n * 5);
       const gl = this.gl;
       gl.bindBuffer(gl.ARRAY_BUFFER, this.pointsVbo);
       gl.bufferData(gl.ARRAY_BUFFER, this.vertData.byteLength, gl.DYNAMIC_DRAW);
@@ -920,8 +956,8 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       const v = this.viewport;
       if (!v) {
         // Bootstrap path — viewport not yet computed. Encode "dead" so
-        // the vertex shader collapses the point.
-        return { mx: 0, my: 0.5, age: 0, speed: -1 };
+        // the vertex shader culls the instance.
+        return { mx: 0, my: 0.5, pmx: 0, pmy: 0.5, age: 0, speed: -1 };
       }
       // Extend the seeding bbox by SEED_MARGIN on every side so particles
       // drift INTO the visible viewport from upstream, not just starting
@@ -1003,6 +1039,8 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       return {
         mx,
         my,
+        pmx: mx,
+        pmy: my,
         age: Math.floor(Math.random() * this.maxAge),
         speed: found ? 0 : -1,
       };
@@ -1105,20 +1143,36 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       const eff = isGlobe
         ? this.speedScale * Math.min(0.25, Math.pow(0.5, zoom))
         : this.speedScale * Math.pow(0.5, zoom);
-      // Cap the per-frame step in screen pixels. The trail buffer fades
-      // each frame, so the visual trail is the chain of past dot
-      // positions; if consecutive dots are further apart than the dot
-      // diameter, the trail breaks into discrete polka-dots (visible on
-      // fast jets / strong currents like the East African Coastal
-      // Current). Scale step magnitude down to ~70% of point size so
-      // consecutive dots overlap. Fast and slow regions remain visually
-      // distinguishable below the cap — only the cap itself flattens.
-      const canvas = this.map.getCanvas();
+      // Per-frame step is FLOORED in screen pixels so the animation stays
+      // legible regardless of the field's true dynamic range (visual
+      // correctness over accuracy — color-by-speed still encodes true speed
+      // via p.speed, which the clamp never touches). The floor keeps
+      // near-calm particles drifting visibly instead of sitting still and
+      // popping out of existence. There is NO max cap: segments connect
+      // prev→cur, so a fast particle draws a long continuous streak rather
+      // than skipping pixels into polka-dots — the very problem a cap used to
+      // (imperfectly) paper over. Genuine zero (u==v==0) stays put via the
+      // `stepMag > 0` guard.
+      //
+      // Measure device-px-per-mercator from the LIVE projection at the screen
+      // centre, NOT the viewport bbox: on the globe the bbox can span most of
+      // the world while the zoomed-in centre fills the screen, so a
+      // bbox-derived scale is wildly off exactly where the fast equatorial
+      // currents are.
       const v = this.viewport;
       if (!v) return;
-      const pxPerMercator = canvas.width / Math.max(v.mxMax - v.mxMin, 1e-9);
-      const maxStepPixels = this.pointSize * 0.7;
-      const maxStepMercator = maxStepPixels / pxPerMercator;
+      const canvas = this.map.getCanvas();
+      const dpr = canvas.width / Math.max(1, canvas.clientWidth || canvas.width);
+      const ctr = this.map.getCenter();
+      const EPS_LNG = 0.1;
+      const pa = this.map.project([ctr.lng - EPS_LNG, ctr.lat]);
+      const pb = this.map.project([ctr.lng + EPS_LNG, ctr.lat]);
+      const screenDevPx = Math.hypot(pb.x - pa.x, pb.y - pa.y) * dpr;
+      const mercDelta = (2 * EPS_LNG) / 360; // mercator-x span of 2·EPS_LNG° lng
+      const pxPerMercator = (screenDevPx > 1e-6 && mercDelta > 1e-12)
+        ? screenDevPx / mercDelta
+        : canvas.width / Math.max(v.mxMax - v.mxMin, 1e-9); // bbox fallback
+      const minStepMercator = MIN_STEP_PIXELS / pxPerMercator;
       // Probability a dead particle attempts to re-seed this frame. Set to
       // ~1/maxAge so dead-recycle rate matches live-recycle rate (dominated
       // by aging) — that's what gives steady-state live count ≈ N × ocean
@@ -1135,6 +1189,8 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
             const seed = this.makeParticle();
             p.mx = seed.mx;
             p.my = seed.my;
+            p.pmx = seed.pmx;
+            p.pmy = seed.pmy;
             p.age = seed.age;
             p.speed = seed.speed;
           }
@@ -1143,15 +1199,19 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
         const w = this.sampleWind(p.mx, p.my);
         let recycle = w === null;
         if (!recycle && w) {
-          p.speed = Math.sqrt(w.u * w.u + w.v * w.v);
+          p.speed = Math.sqrt(w.u * w.u + w.v * w.v); // TRUE speed (drives color)
           let dx = w.u * eff;
           let dy = -w.v * eff;
           const stepMag = Math.sqrt(dx * dx + dy * dy);
-          if (stepMag > maxStepMercator) {
-            const s = maxStepMercator / stepMag;
+          // Floor the step (preserving direction) so slow particles still
+          // drift; genuine zero stays zero.
+          if (stepMag > 0 && stepMag < minStepMercator) {
+            const s = minStepMercator / stepMag;
             dx *= s;
             dy *= s;
           }
+          p.pmx = p.mx;
+          p.pmy = p.my;
           p.mx += dx;
           p.my += dy;
           p.age++;
@@ -1165,6 +1225,8 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
           const seed = this.makeParticle();
           p.mx = seed.mx;
           p.my = seed.my;
+          p.pmx = seed.pmx;
+          p.pmy = seed.pmy;
           p.age = seed.age;
           p.speed = seed.speed;  // 0 for live seed, -1 for dead seed
         }
@@ -1184,6 +1246,11 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       const data = this.vertData;
       let idx = 0;
       for (const p of this.particles) {
+        // Per instance: prev delta, cur delta, speed. Both endpoints are
+        // deltas from the same origin so the shader's split-precision sum
+        // holds for each.
+        data[idx++] = p.pmx - originMx;
+        data[idx++] = p.pmy - originMy;
         data[idx++] = p.mx - originMx;
         data[idx++] = p.my - originMy;
         data[idx++] = p.speed || 0;
@@ -1200,12 +1267,15 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       this.pointsProgram = buildPointsProgram(gl, normalised.shaderData);
       this.pointsProgramVariant = variant;
       const p = this.pointsProgram;
-      this.pointsAttrPos = gl.getAttribLocation(p, 'a_pos');
+      this.pointsAttrPrev = gl.getAttribLocation(p, 'a_prev');
+      this.pointsAttrCur = gl.getAttribLocation(p, 'a_cur');
       this.pointsAttrSpeed = gl.getAttribLocation(p, 'a_speed');
+      this.pointsAttrCorner = gl.getAttribLocation(p, 'a_corner');
       this.pointsUOrigin = gl.getUniformLocation(p, 'u_origin');
       this.pointsUOriginClip = gl.getUniformLocation(p, 'u_origin_clip');
       this.pointsUOpacity = gl.getUniformLocation(p, 'u_opacity');
-      this.pointsUSize = gl.getUniformLocation(p, 'u_pointSize');
+      this.pointsUViewport = gl.getUniformLocation(p, 'u_viewport');
+      this.pointsULineWidth = gl.getUniformLocation(p, 'u_lineWidth');
       this.pointsUVmin = gl.getUniformLocation(p, 'u_vmin');
       this.pointsUVmax = gl.getUniformLocation(p, 'u_vmax');
       this.pointsUColorBySpeed = gl.getUniformLocation(p, 'u_colorBySpeed');
@@ -1333,15 +1403,31 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       gl.bindTexture(gl.TEXTURE_2D, this.fbB.tex);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-      // 1b. Add new points additively (premultiplied; ONE/ONE).
+      // 1b. Add new segments additively (premultiplied; ONE/ONE). Each
+      // particle is ONE instance; the 6-vertex corner buffer expands its
+      // prev→cur into a screen-space quad in the vertex shader.
       gl.useProgram(this.pointsProgram);
+
+      // Per-instance attributes (divisor 1): prev (vec2), cur (vec2), speed.
       gl.bindBuffer(gl.ARRAY_BUFFER, this.pointsVbo);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.vertData);
-      const stride = 3 * 4;
-      gl.enableVertexAttribArray(this.pointsAttrPos);
-      gl.vertexAttribPointer(this.pointsAttrPos, 2, gl.FLOAT, false, stride, 0);
+      const stride = 5 * 4;
+      gl.enableVertexAttribArray(this.pointsAttrPrev);
+      gl.vertexAttribPointer(this.pointsAttrPrev, 2, gl.FLOAT, false, stride, 0);
+      gl.vertexAttribDivisor(this.pointsAttrPrev, 1);
+      gl.enableVertexAttribArray(this.pointsAttrCur);
+      gl.vertexAttribPointer(this.pointsAttrCur, 2, gl.FLOAT, false, stride, 2 * 4);
+      gl.vertexAttribDivisor(this.pointsAttrCur, 1);
       gl.enableVertexAttribArray(this.pointsAttrSpeed);
-      gl.vertexAttribPointer(this.pointsAttrSpeed, 1, gl.FLOAT, false, stride, 2 * 4);
+      gl.vertexAttribPointer(this.pointsAttrSpeed, 1, gl.FLOAT, false, stride, 4 * 4);
+      gl.vertexAttribDivisor(this.pointsAttrSpeed, 1);
+
+      // Per-vertex corner (end, side) — divisor 0 (advances per vertex).
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerVbo);
+      gl.enableVertexAttribArray(this.pointsAttrCorner);
+      gl.vertexAttribPointer(this.pointsAttrCorner, 2, gl.FLOAT, false, 0, 0);
+      gl.vertexAttribDivisor(this.pointsAttrCorner, 0);
+
       this._setProjectionUniforms(gl, n);
       if (this.coordOrigin) {
         const [ox, oy] = this.coordOrigin;
@@ -1368,7 +1454,8 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
         }
       }
       if (this.pointsUOpacity) gl.uniform1f(this.pointsUOpacity, 1.0);
-      if (this.pointsUSize) gl.uniform1f(this.pointsUSize, this.pointSize);
+      if (this.pointsUViewport) gl.uniform2f(this.pointsUViewport, this.fbW, this.fbH);
+      if (this.pointsULineWidth) gl.uniform1f(this.pointsULineWidth, this.pointSize);
       if (this.pointsUVmin) gl.uniform1f(this.pointsUVmin, this.vmin);
       if (this.pointsUVmax) gl.uniform1f(this.pointsUVmax, this.vmax);
       if (this.pointsUColorBySpeed) gl.uniform1f(this.pointsUColorBySpeed, this.colorBySpeed ? 1.0 : 0.0);
@@ -1384,7 +1471,13 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       }
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE);
-      gl.drawArrays(gl.POINTS, 0, this.N);
+      gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, this.N);
+      // Reset per-instance divisors right away: they live on the shared
+      // default VAO, so a leaked divisor=1 would corrupt the composite pass
+      // below (and the next layer), which draw with plain divisor-0 arrays.
+      gl.vertexAttribDivisor(this.pointsAttrPrev, 0);
+      gl.vertexAttribDivisor(this.pointsAttrCur, 0);
+      gl.vertexAttribDivisor(this.pointsAttrSpeed, 0);
 
       // 2. Composite fbA to screen with premultiplied alpha blend.
       gl.bindFramebuffer(gl.FRAMEBUFFER, savedFbo);
@@ -1408,8 +1501,10 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       // a still-enabled array pointing at a deleted buffer makes the next
       // layer's drawArrays throw INVALID_OPERATION.
       gl.disableVertexAttribArray(this.fadeAttrPos);
-      gl.disableVertexAttribArray(this.pointsAttrPos);
+      gl.disableVertexAttribArray(this.pointsAttrPrev);
+      gl.disableVertexAttribArray(this.pointsAttrCur);
       gl.disableVertexAttribArray(this.pointsAttrSpeed);
+      gl.disableVertexAttribArray(this.pointsAttrCorner);
       gl.disableVertexAttribArray(this.compositeAttrPos);
 
       // 3. Swap framebuffers for next frame.

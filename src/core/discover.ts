@@ -127,12 +127,27 @@ export async function discoverLatestItem(
   const collectionUrl = resolveUrl(catalogUrl, childLink.href);
   const collection: CollectionJson = await fetchJson(collectionUrl);
 
-  // Items are listed in lexical order; the newest cycle is last.
+  // Pick the newest cycle's analysis (lowest forecast hour). Item hrefs are
+  // "<cycle>/<fhour>/item.json" with `cycle` = YYYYMMDDHH and `fhour` =
+  // fNNN — both zero-padded, so lexical compare is chronological. We sort by
+  // (cycle desc, fhour asc) rather than trusting list position: the pipeline
+  // emits items newest-cycle-FIRST, so a naive "last link is newest" picks
+  // the OLDEST cycle — which the retention sweep has usually deleted, giving
+  // a 404 on the item fetch. Comparing explicitly also guarantees we land on
+  // a cycle the sweep keeps (the newest), independent of how many stale
+  // cycles the collection still lists.
   const itemLinks = collection.links.filter((l) => l.rel === 'item');
   if (itemLinks.length === 0) {
     throw new Error(`@mercator-blue/sdk: no items in collection ${collectionUrl}`);
   }
-  const latestItemHref = itemLinks[itemLinks.length - 1].href;
+  const latestItemHref = itemLinks
+    .map((l) => l.href)
+    .sort((a, b) => {
+      const [ca, fa] = a.split('/');
+      const [cb, fb] = b.split('/');
+      if (ca !== cb) return ca < cb ? 1 : -1; // cycle descending
+      return fa < fb ? -1 : fa > fb ? 1 : 0;   // fhour ascending (f000 first)
+    })[0];
   const itemUrl = resolveUrl(collectionUrl, latestItemHref);
   const item: ItemJson = await fetchJson(itemUrl);
 
