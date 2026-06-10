@@ -37,6 +37,13 @@ const DEFAULT_OPACITY = 0.85;
 const DEFAULT_SPEED_SCALE = 6e-5;
 const DEFAULT_FADE = 0.99;
 
+// Per-frame step floor, in device pixels. Slower particles are sped up to
+// this (preserving direction) so calm regions still drift visibly instead
+// of freezing and popping out; genuine zero stays zero. There is NO max
+// counterpart — segment quads make trails continuous at any speed (the old
+// `0.7 × pointSize` max cap is gone). Matches the other bindings.
+const MIN_STEP_PIXELS = 0.5;
+
 // --- Module-level caches ---------------------------------------------
 
 const discoveryCache = new Map<string, DiscoveredItem | Promise<DiscoveredItem>>();
@@ -92,30 +99,67 @@ function ensureTilePixels(
 
 // --- Shaders (GLSL 3.00 ES, raw WebGL2) -----------------------------
 
-// Particles are projected on CPU (see _packVertexData) and arrive
-// in clip space directly. Trade: ~Nlog(N)·viewport.project() calls
-// per frame (negligible at our particle counts), in exchange for
-// sidestepping deck.gl's COMMON-coord / split-precision matrix
-// pipeline — which is non-trivial to invoke from outside a stock
-// Layer that uses the `project` shader module.
+// Particles are projected on CPU (see _packVertexData) and arrive in clip
+// space directly (perspective-divided, so w = 1). Trade: a manual
+// pixelProjectionMatrix multiply per particle per frame (negligible at our
+// counts), in exchange for sidestepping deck.gl's COMMON-coord /
+// split-precision matrix pipeline.
+//
+// Each particle is ONE instance; the 6 per-vertex `a_corner` values (two
+// triangles of a unit quad) expand the particle's prev->cur move into a
+// screen-space quad of width u_lineWidth, with half-width square end-caps
+// so consecutive frames' segments overlap into a continuous trail and a
+// stationary particle still renders as a dot. Drawing the per-frame MOVE
+// as a connected quad (rather than a GL_POINT) makes trails continuous at
+// ANY speed — fast particles draw long segments instead of skipping pixels
+// — so no max-speed cap is needed.
 const POINTS_VS = `#version 300 es
-in vec2 a_clipPos;
-in float a_speed;
+in vec2 a_prevClip;   // per-instance: previous position, clip space (w=1)
+in vec2 a_curClip;    // per-instance: current  position, clip space (w=1)
+in float a_speed;     // per-instance: true speed; < 0 = dead sentinel
+in vec2 a_corner;     // per-vertex: (end, side) — end 0=prev 1=cur, side -1/+1
 
-uniform float u_pointSize;
+uniform vec2 u_viewport;    // device px (trail-FBO size)
+uniform float u_lineWidth;  // device px (full segment width)
 
 out float v_speed;
+out float v_edge;           // signed cross-line coord (-1..1) for edge AA
 
 void main() {
   if (a_speed < 0.0) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-    gl_PointSize = 0.0;
     v_speed = -1.0;
+    v_edge = 0.0;
     return;
   }
-  gl_Position = vec4(a_clipPos, 0.0, 1.0);
-  gl_PointSize = u_pointSize;
+
+  // Endpoints already in clip space (w = 1); convert to pixel space to
+  // build the screen-space tangent + perpendicular.
+  vec2 pixPrev = a_prevClip * 0.5 * u_viewport;
+  vec2 pixCur  = a_curClip  * 0.5 * u_viewport;
+
+  vec2 tangent = pixCur - pixPrev;
+  float tLen = length(tangent);
+  // Degenerate (near-zero step): fixed axes so the caps draw a square dot
+  // rather than collapsing to NaN.
+  vec2 tdir   = tLen > 1e-4 ? tangent / tLen                     : vec2(1.0, 0.0);
+  vec2 normal = tLen > 1e-4 ? vec2(-tangent.y, tangent.x) / tLen : vec2(0.0, 1.0);
+
+  float end  = a_corner.x;   // 0 = prev, 1 = cur
+  float side = a_corner.y;   // -1 / +1
+  float halfW = u_lineWidth * 0.5;
+  vec2 baseClip = mix(a_prevClip, a_curClip, end);
+
+  // Perpendicular offset gives width; the longitudinal half-width cap
+  // (prev backward, cur forward) makes consecutive segments overlap into a
+  // seamless trail and turns a zero-length step into a centered dot.
+  float along = end < 0.5 ? -1.0 : 1.0;
+  vec2 offsetPx = normal * side * halfW + tdir * along * halfW;
+  vec2 offsetClip = offsetPx / (0.5 * u_viewport);
+
+  gl_Position = vec4(baseClip + offsetClip, 0.0, 1.0);
   v_speed = a_speed;
+  v_edge = side;
 }
 `;
 
@@ -168,12 +212,16 @@ uniform float u_colorBySpeed;
 uniform float u_opacity;
 
 in float v_speed;
+in float v_edge;
 out vec4 fragColor;
 
 void main() {
   if (v_speed < 0.0) discard;
-  vec2 d = gl_PointCoord - 0.5;
-  if (dot(d, d) > 0.25) discard;
+  // Soft perpendicular edge: full alpha in the core, fading to 0 at
+  // |v_edge| = 1 over a ~1px band regardless of line width.
+  float aa = max(fwidth(v_edge), 1e-4);
+  float a = (1.0 - smoothstep(1.0 - aa, 1.0, abs(v_edge))) * u_opacity;
+  if (a <= 0.0) discard;
   vec3 col;
   if (u_colorBySpeed > 0.5) {
     float span = max(u_vmax - u_vmin, 1e-6);
@@ -182,7 +230,7 @@ void main() {
   } else {
     col = vec3(1.0);
   }
-  fragColor = vec4(col * u_opacity, u_opacity);
+  fragColor = vec4(col * a, a);
 }
 `;
 
@@ -210,6 +258,11 @@ function makeFramebuffer(
 interface Particle {
   mx: number;
   my: number;
+  /** Previous-frame position. The segment renderer draws prev->cur as one
+   *  continuous quad, so trails never gap regardless of speed. Seeded
+   *  equal to mx/my (a fresh particle's first segment is a zero-length dot). */
+  pmx: number;
+  pmy: number;
   age: number;
   /** m/s. -1 marks a "dead" particle (no valid seed yet). */
   speed: number;
@@ -278,11 +331,14 @@ export class MercatorStreamlinesLayer extends Layer<MercatorStreamlinesLayerProp
     const gl = (context.device as any).gl as WebGL2RenderingContext;
     if (!gl) throw new Error('@mercator-blue/sdk/deck-gl: MercatorStreamlinesLayer — WebGL2 context not available');
 
-    // Points program — animated dots driven by CPU sim.
+    // Points program — animated segments driven by CPU sim.
     const program = createProgram(gl, POINTS_VS, POINTS_FS);
-    const attrPos = gl.getAttribLocation(program, 'a_clipPos');
+    const attrPrev = gl.getAttribLocation(program, 'a_prevClip');
+    const attrCur = gl.getAttribLocation(program, 'a_curClip');
     const attrSpeed = gl.getAttribLocation(program, 'a_speed');
-    const uPointSize = gl.getUniformLocation(program, 'u_pointSize');
+    const attrCorner = gl.getAttribLocation(program, 'a_corner');
+    const uViewport = gl.getUniformLocation(program, 'u_viewport');
+    const uLineWidth = gl.getUniformLocation(program, 'u_lineWidth');
     const uColormap = gl.getUniformLocation(program, 'u_colormap');
     const uVmin = gl.getUniformLocation(program, 'u_vmin');
     const uVmax = gl.getUniformLocation(program, 'u_vmax');
@@ -305,14 +361,39 @@ export class MercatorStreamlinesLayer extends Layer<MercatorStreamlinesLayerProp
     const pointsBuffer = gl.createBuffer()!;
     const colormapTexture = gl.createTexture()!;
 
-    // Points VAO holds bindings for (a_clipPos, a_speed) on pointsBuffer.
+    // Static per-vertex corner buffer: the two triangles of a unit quad,
+    // each vertex carrying (end, side) — end 0=prev / 1=cur endpoint, side
+    // -1/+1 across the width. The instanced draw expands these against each
+    // particle's prev/cur into a screen-space segment quad.
+    const cornerBuffer = gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, cornerBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      0, -1,   0, 1,   1, -1,
+      1, -1,   0, 1,   1, 1,
+    ]), gl.STATIC_DRAW);
+
+    // Points VAO: per-instance (a_prevClip, a_curClip, a_speed) on
+    // pointsBuffer at divisor 1 (5 floats/instance), plus the per-vertex
+    // (a_corner) on cornerBuffer at divisor 0. Divisors are VAO state and
+    // this VAO is used only by the instanced points draw, so they're set
+    // once here and never need resetting.
     const vao = gl.createVertexArray()!;
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, pointsBuffer);
-    gl.enableVertexAttribArray(attrPos);
-    gl.vertexAttribPointer(attrPos, 2, gl.FLOAT, false, 12, 0);
+    const stride = 5 * 4;
+    gl.enableVertexAttribArray(attrPrev);
+    gl.vertexAttribPointer(attrPrev, 2, gl.FLOAT, false, stride, 0);
+    gl.vertexAttribDivisor(attrPrev, 1);
+    gl.enableVertexAttribArray(attrCur);
+    gl.vertexAttribPointer(attrCur, 2, gl.FLOAT, false, stride, 8);
+    gl.vertexAttribDivisor(attrCur, 1);
     gl.enableVertexAttribArray(attrSpeed);
-    gl.vertexAttribPointer(attrSpeed, 1, gl.FLOAT, false, 12, 8);
+    gl.vertexAttribPointer(attrSpeed, 1, gl.FLOAT, false, stride, 16);
+    gl.vertexAttribDivisor(attrSpeed, 1);
+    gl.bindBuffer(gl.ARRAY_BUFFER, cornerBuffer);
+    gl.enableVertexAttribArray(attrCorner);
+    gl.vertexAttribPointer(attrCorner, 2, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribDivisor(attrCorner, 0);
     gl.bindVertexArray(null);
 
     // Quad VBO + VAO, shared between the fade and composite programs.
@@ -345,9 +426,11 @@ export class MercatorStreamlinesLayer extends Layer<MercatorStreamlinesLayerProp
       program,
       vao,
       pointsBuffer,
+      cornerBuffer,
       colormapTexture,
       colormapBytes: null as Uint8Array | null,
-      uPointSize,
+      uViewport,
+      uLineWidth,
       uColormap,
       uVmin,
       uVmax,
@@ -451,6 +534,7 @@ export class MercatorStreamlinesLayer extends Layer<MercatorStreamlinesLayerProp
       if (s.fadeProgram) gl.deleteProgram(s.fadeProgram);
       if (s.compositeProgram) gl.deleteProgram(s.compositeProgram);
       if (s.pointsBuffer) gl.deleteBuffer(s.pointsBuffer);
+      if (s.cornerBuffer) gl.deleteBuffer(s.cornerBuffer);
       if (s.quadBuffer) gl.deleteBuffer(s.quadBuffer);
       if (s.vao) gl.deleteVertexArray(s.vao);
       if (s.quadVao) gl.deleteVertexArray(s.quadVao);
@@ -551,11 +635,14 @@ export class MercatorStreamlinesLayer extends Layer<MercatorStreamlinesLayerProp
     gl.uniform1i(s.fadeUTex, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-    // 1b. New points additively (premultiplied; ONE + ONE so colours
-    //     accumulate where particles overlap).
+    // 1b. New segments additively (premultiplied; ONE + ONE so colours
+    //     accumulate where particles overlap). Each particle is ONE
+    //     instance; the static corner buffer (bound in the VAO) expands
+    //     its prev->cur into a screen-space quad.
     gl.useProgram(s.program);
     gl.bindVertexArray(s.vao);
-    gl.uniform1f(s.uPointSize, this.props.pointSize ?? DEFAULT_POINT_SIZE);
+    gl.uniform2f(s.uViewport, s.fbW, s.fbH);
+    gl.uniform1f(s.uLineWidth, this.props.pointSize ?? DEFAULT_POINT_SIZE);
     gl.uniform1f(s.uVmin, this.props.vmin ?? 0);
     gl.uniform1f(
       s.uVmax,
@@ -570,7 +657,7 @@ export class MercatorStreamlinesLayer extends Layer<MercatorStreamlinesLayerProp
     gl.uniform1i(s.uColormap, 0);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
-    gl.drawArrays(gl.POINTS, 0, s.particleCount);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, s.particleCount);
 
     // 2. Composite fbA onto the main framebuffer with premultiplied
     //    alpha so the trail blends naturally over the basemap.
@@ -671,7 +758,7 @@ export class MercatorStreamlinesLayer extends Layer<MercatorStreamlinesLayerProp
     this.setState({
       particleCount: wanted,
       particles: [],
-      particleData: new Float32Array(wanted * 3),
+      particleData: new Float32Array(wanted * 5),
     });
     // Wipe trails so the previous-count particles don't linger in the
     // FBO as a ghost cloud while they fade out over ~100 frames.
@@ -744,9 +831,13 @@ export class MercatorStreamlinesLayer extends Layer<MercatorStreamlinesLayerProp
     const maxAge = this.props.maxAge ?? DEFAULT_MAX_AGE_FRAMES;
     const particles: Particle[] = new Array(count);
     for (let i = 0; i < count; i++) {
+      const mx = seedXMin + Math.random() * spanX;
+      const my = seedYMin + Math.random() * spanY;
       particles[i] = {
-        mx: seedXMin + Math.random() * spanX,
-        my: seedYMin + Math.random() * spanY,
+        mx,
+        my,
+        pmx: mx,   // zero-length first segment
+        pmy: my,
         age: Math.floor(Math.random() * maxAge),
         speed: 0,
       };
@@ -784,8 +875,12 @@ export class MercatorStreamlinesLayer extends Layer<MercatorStreamlinesLayerProp
       my >= myMin - SEED_MARGIN * sy &&
       my <= myMax + SEED_MARGIN * sy;
 
-    const mxPerPx = sx / Math.max(1, viewport.width);
-    const maxStep = (this.props.pointSize ?? DEFAULT_POINT_SIZE) * 0.7 * mxPerPx;
+    // Per-frame step FLOOR (no max cap — segment quads keep trails
+    // continuous at any speed). Measured in DEVICE px (the trail FBO is
+    // sized to the drawing buffer): the visible mercator span sx maps to
+    // fbW device px, so mercator-per-device-px = sx / fbW.
+    const devW = Math.max(1, this.state.fbW || viewport.width);
+    const minStep = (MIN_STEP_PIXELS * sx) / devW;
 
     const maxAge = this.props.maxAge ?? DEFAULT_MAX_AGE_FRAMES;
     const deadReviveProb = 1 / Math.max(1, maxAge);
@@ -806,11 +901,15 @@ export class MercatorStreamlinesLayer extends Layer<MercatorStreamlinesLayerProp
       let dx = sample.u * eff;
       let dy = -sample.v * eff;
       const stepMag = Math.sqrt(dx * dx + dy * dy);
-      if (stepMag > maxStep) {
-        const k = maxStep / stepMag;
+      // Floor the step (preserving direction) so slow particles still
+      // drift; genuine zero stays put.
+      if (stepMag > 0 && stepMag < minStep) {
+        const k = minStep / stepMag;
         dx *= k;
         dy *= k;
       }
+      p.pmx = p.mx;
+      p.pmy = p.my;
       p.mx += dx;
       p.my += dy;
       p.age++;
@@ -843,6 +942,8 @@ export class MercatorStreamlinesLayer extends Layer<MercatorStreamlinesLayerProp
     const spanY = Math.max(0, seedYMax - seedYMin);
     p.mx = seedXMin + Math.random() * spanX;
     p.my = seedYMin + Math.random() * spanY;
+    p.pmx = p.mx;   // zero-length first segment
+    p.pmy = p.my;
     p.age = Math.floor(Math.random() * maxAge);
     p.speed = 0;
   }
@@ -926,34 +1027,42 @@ export class MercatorStreamlinesLayer extends Layer<MercatorStreamlinesLayerProp
     const m0 = pm[0], m1 = pm[1], m3 = pm[3];
     const m4 = pm[4], m5 = pm[5], m7 = pm[7];
     const m12 = pm[12], m13 = pm[13], m15 = pm[15];
+    // Project a slippy-convention (mx, my) to NDC, or null if behind the
+    // camera. deck.gl's COMMON-y INCREASES going north (lngLatToWorld in
+    // @math.gl/web-mercator: y = TILE_SIZE * (1 - my_slippy)); our
+    // particles carry slippy my (0 north, 1 south), so flip here — without
+    // it every off-equator particle projects to the wrong hemisphere.
+    const project = (mx: number, my: number): [number, number] | null => {
+      const cx = mx * WORLD_SCALE;
+      const cy = (1 - my) * WORLD_SCALE;
+      const pw = m3 * cx + m7 * cy + m15;
+      if (!(pw > 0)) return null;
+      const px = (m0 * cx + m4 * cy + m12) / pw;
+      const py = (m1 * cx + m5 * cy + m13) / pw;
+      return [(px / W) * 2 - 1, 1 - (py / H) * 2];
+    };
     let idx = 0;
     for (const p of particles) {
       if (p.speed < 0) {
-        data[idx++] = 0;
-        data[idx++] = 0;
+        data[idx++] = 0; data[idx++] = 0;
+        data[idx++] = 0; data[idx++] = 0;
         data[idx++] = -1;
         continue;
       }
-      const cx = p.mx * WORLD_SCALE;
-      // deck.gl's COMMON-y INCREASES going north (lngLatToWorld in
-      // @math.gl/web-mercator: y = TILE_SIZE * (1 - my_slippy)). Our
-      // particles carry slippy-convention my (0 at north, 1 at south),
-      // so flip here. Without this, every particle off the equator
-      // projects to the wrong hemisphere — invisible past z≈2 because
-      // the visible viewport doesn't cover both poles at once.
-      const cy = (1 - p.my) * WORLD_SCALE;
-      const pw = m3 * cx + m7 * cy + m15;
-      if (!(pw > 0)) {
-        // Behind the camera / degenerate — render off-screen.
-        data[idx++] = 2;
-        data[idx++] = 2;
+      const cur = project(p.mx, p.my);
+      const prev = project(p.pmx, p.pmy);
+      if (!cur || !prev) {
+        // Either endpoint behind the camera — cull this frame via the
+        // speed sentinel (positions are irrelevant once a_speed < 0).
+        data[idx++] = 0; data[idx++] = 0;
+        data[idx++] = 0; data[idx++] = 0;
         data[idx++] = -1;
         continue;
       }
-      const sx = (m0 * cx + m4 * cy + m12) / pw;
-      const sy = (m1 * cx + m5 * cy + m13) / pw;
-      data[idx++] = (sx / W) * 2 - 1;
-      data[idx++] = 1 - (sy / H) * 2;
+      data[idx++] = prev[0];
+      data[idx++] = prev[1];
+      data[idx++] = cur[0];
+      data[idx++] = cur[1];
       data[idx++] = p.speed;
     }
   }

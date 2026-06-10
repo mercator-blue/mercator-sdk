@@ -66,6 +66,13 @@ const DEFAULT_SPEED_SCALE = 6e-5;
 // short enough that the field eventually refreshes everywhere.
 const DEFAULT_MAX_AGE = 600;
 
+// Per-frame step floor, in device pixels. Slower particles are sped up to
+// this (preserving direction) so calm regions still drift visibly instead
+// of freezing and popping out; genuine zero stays zero. There is NO max
+// counterpart — segment quads make trails continuous at any speed (the old
+// `0.7 × dotSize` max cap is gone). Matches the Mapbox/Leaflet bindings.
+const MIN_STEP_PIXELS = 0.5;
+
 // OL renders streamlines at 1/3 the requested point size so the shared
 // controls.js slider (which defaults to 3 across every binding for
 // cross-host consistency) produces visually small dots in OL — the
@@ -142,6 +149,12 @@ function buildLayer(opts: MercatorStreamlinesLayerOpts, item: DiscoveredItem): L
   // ~1.1e-16 ULP at value ~0.5, plenty of headroom for any zoom we
   // realistically support. Ages stay Float32 — they're whole-number-ish.
   let positionsWorld = new Float64Array(2 * particleCount);
+  // Previous-frame position (mercator-world). The segment renderer draws
+  // prev->cur as one continuous quad, so trails never gap regardless of
+  // speed. Kept in lockstep with positionsWorld: seeded equal (zero-length
+  // first segment) and shifted by the same ±1 as cur on antimeridian wrap
+  // so the drawn segment stays short.
+  let prevPositionsWorld = new Float64Array(2 * particleCount);
   let ages = new Float32Array(particleCount);
   // Per-particle current speed in m/s. Initialised to 0 (calm); updated
   // each frame as the particle samples its u/v. Indexes the palette LUT
@@ -181,6 +194,8 @@ function buildLayer(opts: MercatorStreamlinesLayerOpts, item: DiscoveredItem): L
     const [x, y] = randomSeedPos();
     positionsWorld[2 * i] = x;
     positionsWorld[2 * i + 1] = y;
+    prevPositionsWorld[2 * i] = x;     // zero-length first segment
+    prevPositionsWorld[2 * i + 1] = y;
     // Spread initial ages so particles don't all recycle on the same frame.
     ages[i] = Math.random() * maxAge;
   }
@@ -247,10 +262,12 @@ function buildLayer(opts: MercatorStreamlinesLayerOpts, item: DiscoveredItem): L
   }
 
   const MAX_COPIES = 8;
-  // Interleaved (x, y, speed_t) per vertex — 3 floats. Each particle is
-  // replicated per visible world copy (up to MAX_COPIES).
-  const VERTEX_FLOATS = 3;
-  let pixelBuf = new Float32Array(VERTEX_FLOATS * particleCount * MAX_COPIES);
+  // Interleaved (prevX, prevY, curX, curY, speed_t) per INSTANCE — 5
+  // floats. Each particle is replicated per visible world copy (up to
+  // MAX_COPIES); the static 6-vertex corner buffer expands each instance
+  // into a screen-space segment quad.
+  const INSTANCE_FLOATS = 5;
+  let pixelBuf = new Float32Array(INSTANCE_FLOATS * particleCount * MAX_COPIES);
 
   const cache = new Map<string, TileCacheEntry>();
 
@@ -267,16 +284,29 @@ function buildLayer(opts: MercatorStreamlinesLayerOpts, item: DiscoveredItem): L
   const gl: WebGL2RenderingContext = gl0;
 
   const program = createProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
-  const aPos = gl.getAttribLocation(program, 'a_pos');
+  const aPrev = gl.getAttribLocation(program, 'a_prev');
+  const aCur = gl.getAttribLocation(program, 'a_cur');
   const aSpeedT = gl.getAttribLocation(program, 'a_speed_t');
+  const aCorner = gl.getAttribLocation(program, 'a_corner');
   const uSize = gl.getUniformLocation(program, 'u_size');
-  const uDpr = gl.getUniformLocation(program, 'u_dpr');
   const uPointSize = gl.getUniformLocation(program, 'u_point_size');
   const uColorBySpeed = gl.getUniformLocation(program, 'u_color_by_speed');
   const uPalette = gl.getUniformLocation(program, 'u_palette');
 
   const vbo = gl.createBuffer();
   if (!vbo) throw new Error('@mercator-blue/sdk/openlayers: streamlines — gl.createBuffer returned null');
+
+  // Static per-vertex corner buffer: the two triangles of a unit quad,
+  // each vertex carrying (end, side) — end 0=prev / 1=cur endpoint, side
+  // -1/+1 across the width. The instanced draw expands these against each
+  // particle's prev/cur into a screen-space segment quad.
+  const cornerVbo = gl.createBuffer();
+  if (!cornerVbo) throw new Error('@mercator-blue/sdk/openlayers: streamlines — gl.createBuffer (corner) returned null');
+  gl.bindBuffer(gl.ARRAY_BUFFER, cornerVbo);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    0, -1,   0, 1,   1, -1,
+    1, -1,   0, 1,   1, 1,
+  ]), gl.STATIC_DRAW);
 
   // Fade pass: full-screen quad reading the previous trail texture.
   const fadeProgram = createProgram(gl, QUAD_VS, FADE_FS);
@@ -478,6 +508,8 @@ function buildLayer(opts: MercatorStreamlinesLayerOpts, item: DiscoveredItem): L
       if (sample === null || Number.isFinite(sample[0])) {
         positionsWorld[2 * i] = x;
         positionsWorld[2 * i + 1] = y;
+        prevPositionsWorld[2 * i] = x;     // zero-length first segment
+        prevPositionsWorld[2 * i + 1] = y;
         ages[i] = Math.random() * maxAge;
         return;
       }
@@ -485,6 +517,8 @@ function buildLayer(opts: MercatorStreamlinesLayerOpts, item: DiscoveredItem): L
     const [x, y] = randomSeedPos();
     positionsWorld[2 * i] = x;
     positionsWorld[2 * i + 1] = y;
+    prevPositionsWorld[2 * i] = x;
+    prevPositionsWorld[2 * i + 1] = y;
     ages[i] = Math.random() * maxAge;
   }
 
@@ -535,22 +569,24 @@ function buildLayer(opts: MercatorStreamlinesLayerOpts, item: DiscoveredItem): L
       for (let i = 0; i < particleCount; i++) recycleParticle(i, zData);
     }
 
-    // Per-frame step cap (CLAUDE.md "polka-dot trails" hazard). Without
-    // this, the same `speedScale * v` advance covers ever more CSS
-    // pixels as the user zooms in, until each frame's step exceeds the
-    // dot diameter and trails visibly break up into separated dots.
-    // Capping per-particle to `0.7 × renderedDotSize` CSS px keeps each
-    // new dot overlapping the previous one — continuous trails, at
-    // the cost of slower apparent motion at very high zoom (where the
-    // earth-frame wind would otherwise outrun the rasterised trail).
-    //
-    // Rendered dot size in CSS pixels = pointSize / 3 (matches the
-    // POINT_SIZE_SCALE in the vertex shader). The user-facing
-    // `pointSize` is in "abstract control units" so the same slider
-    // produces sensible results across every binding.
-    const renderedDotCss = pointSize / 3;
+    // Per-frame advance is scaled by 0.5^zoom so the pixel-speed is
+    // CONSTANT across zoom (step_px = speedScale·v·0.5^z · 256·2^z =
+    // speedScale·v·256 — the 2^z cancels). This matches the
+    // Mapbox/Leaflet/deck.gl bindings. (Earlier this layer leaned on the
+    // per-frame max cap to bound speed, which masked the missing zoom
+    // factor; with the cap removed the unnormalised step ran ~2× faster
+    // per zoom level — visibly far too fast, straight lines, static gyres.)
+    const effScale = speedScale * Math.pow(0.5, viewZoom);
+
+    // Per-frame step FLOOR (no max cap — segment quads keep trails
+    // continuous at any speed, so the old "polka-dot" max cap is gone).
+    // The floor keeps near-calm particles drifting visibly instead of
+    // freezing and popping out; genuine zero stays put. Measured in
+    // device pixels (uniform px-per-world on flat Mercator), matching the
+    // Mapbox/Leaflet bindings.
     const cssPerWorld = 256 * Math.pow(2, viewZoom);
-    const maxStepWorld = (0.7 * renderedDotCss) / cssPerWorld;
+    const devPerWorld = cssPerWorld * dpr;
+    const minStepWorld = MIN_STEP_PIXELS / Math.max(1e-9, devPerWorld);
 
     // ---- Step 1: advance the simulation by one frame ----
     for (let i = 0; i < particleCount; i++) {
@@ -579,22 +615,24 @@ function buildLayer(opts: MercatorStreamlinesLayerOpts, item: DiscoveredItem): L
         continue;
       }
 
-      // Track the particle's speed for colour-by-speed. Stored from the
-      // raw bilinear sample (not the post-cap value) so the colour ramp
-      // reflects the true wind speed at that location even when the
-      // step cap has slowed the apparent motion at high zoom.
+      // Track the particle's TRUE speed for colour-by-speed (from the raw
+      // bilinear sample, untouched by the step floor below).
       speeds[i] = Math.sqrt(u * u + v * v);
+
+      // Save the pre-advance position as the segment's prev endpoint.
+      prevPositionsWorld[2 * i] = xWorld;
+      prevPositionsWorld[2 * i + 1] = yWorld;
 
       // Advance. u is east (positive +x_world), v is north (positive
       // means -y_world because mercator-world Y increases southward).
-      // Scale down when the proposed step exceeds the per-frame cap so
-      // trails never break up into dots — see maxStepWorld derivation
-      // above.
-      let dxWorld = u * speedScale;
-      let dyWorld = -v * speedScale;
+      // effScale folds in the 0.5^zoom normalisation. Floor the step
+      // (preserving direction) so slow particles still drift; genuine
+      // zero stays put.
+      let dxWorld = u * effScale;
+      let dyWorld = -v * effScale;
       const stepWorld = Math.hypot(dxWorld, dyWorld);
-      if (stepWorld > maxStepWorld) {
-        const f = maxStepWorld / stepWorld;
+      if (stepWorld > 0 && stepWorld < minStepWorld) {
+        const f = minStepWorld / stepWorld;
         dxWorld *= f;
         dyWorld *= f;
       }
@@ -605,8 +643,10 @@ function buildLayer(opts: MercatorStreamlinesLayerOpts, item: DiscoveredItem): L
         recycleParticle(i, zData);
         continue;
       }
-      if (xWorld < 0) xWorld += 1;
-      else if (xWorld >= 1) xWorld -= 1;
+      // Antimeridian wrap: shift prev by the SAME ±1 as cur so the drawn
+      // segment stays short instead of stretching across the whole world.
+      if (xWorld < 0) { xWorld += 1; prevPositionsWorld[2 * i] += 1; }
+      else if (xWorld >= 1) { xWorld -= 1; prevPositionsWorld[2 * i] -= 1; }
 
       positionsWorld[2 * i] = xWorld;
       positionsWorld[2 * i + 1] = yWorld;
@@ -629,17 +669,29 @@ function buildLayer(opts: MercatorStreamlinesLayerOpts, item: DiscoveredItem): L
       const copy = copyLo + c;
       const xOff = copy * WORLD_EXT_3857;
       for (let i = 0; i < particleCount; i++) {
-        const xWorld = positionsWorld[2 * i];
-        const yWorld = positionsWorld[2 * i + 1];
-        const x3857 = xWorld * WORLD_EXT_3857 - HALF_MERCATOR + xOff;
-        const y3857 = HALF_MERCATOR - yWorld * WORLD_EXT_3857;
-        const px: [number, number] = [x3857, y3857];
-        applyTransform(frameState.coordinateToPixelTransform, px);
-        pixelBuf[VERTEX_FLOATS * outIdx] = px[0];
-        pixelBuf[VERTEX_FLOATS * outIdx + 1] = px[1];
+        const curXW = positionsWorld[2 * i];
+        const curYW = positionsWorld[2 * i + 1];
+        const prevXW = prevPositionsWorld[2 * i];
+        const prevYW = prevPositionsWorld[2 * i + 1];
+        // Project both endpoints to CSS pixels in this world copy.
+        const curPx: [number, number] = [
+          curXW * WORLD_EXT_3857 - HALF_MERCATOR + xOff,
+          HALF_MERCATOR - curYW * WORLD_EXT_3857,
+        ];
+        applyTransform(frameState.coordinateToPixelTransform, curPx);
+        const prevPx: [number, number] = [
+          prevXW * WORLD_EXT_3857 - HALF_MERCATOR + xOff,
+          HALF_MERCATOR - prevYW * WORLD_EXT_3857,
+        ];
+        applyTransform(frameState.coordinateToPixelTransform, prevPx);
+        const o = INSTANCE_FLOATS * outIdx;
+        pixelBuf[o]     = prevPx[0];
+        pixelBuf[o + 1] = prevPx[1];
+        pixelBuf[o + 2] = curPx[0];
+        pixelBuf[o + 3] = curPx[1];
         // Normalised speed for palette lookup. Clamping happens in the
         // shader (clamp() on the texture coord), so out-of-range is fine.
-        pixelBuf[VERTEX_FLOATS * outIdx + 2] = speeds[i] * invSpeedRef;
+        pixelBuf[o + 4] = speeds[i] * invSpeedRef;
         outIdx++;
       }
     }
@@ -679,7 +731,6 @@ function buildLayer(opts: MercatorStreamlinesLayerOpts, item: DiscoveredItem): L
     }
     gl.useProgram(program);
     gl.uniform2f(uSize, W, H);
-    gl.uniform1f(uDpr, dpr);
     gl.uniform1f(uPointSize, pointSize);
     gl.uniform1f(uColorBySpeed, colorBySpeed ? 1 : 0);
     // Sampler unit 0: palette LUT. (The fade pass uses unit 0 too for
@@ -689,16 +740,34 @@ function buildLayer(opts: MercatorStreamlinesLayerOpts, item: DiscoveredItem): L
     gl.bindTexture(gl.TEXTURE_2D, paletteTexture);
     gl.uniform1i(uPalette, 0);
 
+    // Per-instance attributes (divisor 1): prev (vec2), cur (vec2), speed_t.
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, pixelBuf.subarray(0, VERTEX_FLOATS * outIdx), gl.STREAM_DRAW);
-    const stride = VERTEX_FLOATS * 4; // 3 floats × 4 bytes
-    gl.enableVertexAttribArray(aPos);
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, stride, 0);
+    gl.bufferData(gl.ARRAY_BUFFER, pixelBuf.subarray(0, INSTANCE_FLOATS * outIdx), gl.STREAM_DRAW);
+    const stride = INSTANCE_FLOATS * 4; // 5 floats × 4 bytes
+    gl.enableVertexAttribArray(aPrev);
+    gl.vertexAttribPointer(aPrev, 2, gl.FLOAT, false, stride, 0);
+    gl.vertexAttribDivisor(aPrev, 1);
+    gl.enableVertexAttribArray(aCur);
+    gl.vertexAttribPointer(aCur, 2, gl.FLOAT, false, stride, 8);
+    gl.vertexAttribDivisor(aCur, 1);
     gl.enableVertexAttribArray(aSpeedT);
-    gl.vertexAttribPointer(aSpeedT, 1, gl.FLOAT, false, stride, 8);
+    gl.vertexAttribPointer(aSpeedT, 1, gl.FLOAT, false, stride, 16);
+    gl.vertexAttribDivisor(aSpeedT, 1);
+
+    // Per-vertex corner (end, side) — divisor 0 (advances per vertex).
+    gl.bindBuffer(gl.ARRAY_BUFFER, cornerVbo);
+    gl.enableVertexAttribArray(aCorner);
+    gl.vertexAttribPointer(aCorner, 2, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribDivisor(aCorner, 0);
+
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
-    gl.drawArrays(gl.POINTS, 0, outIdx);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, outIdx);
+    // Reset per-instance divisors immediately so the next frame's fade
+    // pass (plain divisor-0 quad) isn't corrupted on this context's VAO.
+    gl.vertexAttribDivisor(aPrev, 0);
+    gl.vertexAttribDivisor(aCur, 0);
+    gl.vertexAttribDivisor(aSpeedT, 0);
 
     // 3c: blit fboCurr → canvas. blitFramebuffer copies pixels
     // verbatim (no blending); the canvas's own alpha then composites
@@ -771,24 +840,29 @@ function buildLayer(opts: MercatorStreamlinesLayerOpts, item: DiscoveredItem): L
   l.setParticleCount = (n: number) => {
     if (n === particleCount) return;
     const grownPos = new Float64Array(2 * n);
+    const grownPrev = new Float64Array(2 * n);
     const grownAge = new Float32Array(n);
     const grownSpeed = new Float32Array(n);
     const copy = Math.min(n, particleCount);
     grownPos.set(positionsWorld.subarray(0, 2 * copy));
+    grownPrev.set(prevPositionsWorld.subarray(0, 2 * copy));
     grownAge.set(ages.subarray(0, copy));
     grownSpeed.set(speeds.subarray(0, copy));
     for (let i = particleCount; i < n; i++) {
       const [x, y] = randomSeedPos();
       grownPos[2 * i] = x;
       grownPos[2 * i + 1] = y;
+      grownPrev[2 * i] = x;       // zero-length first segment
+      grownPrev[2 * i + 1] = y;
       grownAge[i] = Math.random() * maxAge;
       // grownSpeed[i] stays 0; first valid sample will fill it in.
     }
     positionsWorld = grownPos;
+    prevPositionsWorld = grownPrev;
     ages = grownAge;
     speeds = grownSpeed;
     particleCount = n;
-    pixelBuf = new Float32Array(VERTEX_FLOATS * n * MAX_COPIES);
+    pixelBuf = new Float32Array(INSTANCE_FLOATS * n * MAX_COPIES);
   };
   return layer;
 }

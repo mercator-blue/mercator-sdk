@@ -44,6 +44,14 @@ import { createProgram } from '../core/webgl-helpers';
 // visible edges so directional flows don't starve the downstream rim.
 const SEED_MARGIN = 0.2;
 
+// Per-frame step floor, in device pixels. Slower particles are sped up to
+// this (preserving direction) so calm regions still drift visibly instead
+// of sitting still and popping out; genuine zero stays zero. There is no max
+// counterpart — segment quads make trails continuous at any speed. Must be a
+// meaningful fraction of the line width (~pointSize px), not a hair: ~0.5
+// gives a fading streak that clearly drifts. Matches the Mapbox binding.
+const MIN_STEP_PIXELS = 0.5;
+
 /** Leaflet-specific extras on top of the cross-binding
  *  {@link MercatorStreamlinesOptions}. */
 export type MercatorStreamlinesLayerOpts = MercatorStreamlinesOptions & {
@@ -232,12 +240,18 @@ function ensureLayerClass(): any {
       this._cache = new Map<string, DataTile>();
       this._maskCache = new Map<string, MaskTile>();
       // Particle state stored as parallel arrays so we can pack into a
-      // typed array at upload time without per-particle allocs.
+      // typed array at upload time without per-particle allocs. _pmx/_pmy
+      // hold the previous-frame position: the segment renderer draws
+      // prev->cur as one continuous quad, so trails never gap regardless of
+      // speed. Upload buffer is 5 floats/particle: prevDx, prevDy, curDx,
+      // curDy, speed.
       this._mx = new Float64Array(this._N);
       this._my = new Float64Array(this._N);
+      this._pmx = new Float64Array(this._N);
+      this._pmy = new Float64Array(this._N);
       this._age = new Uint32Array(this._N);
       this._speed = new Float32Array(this._N);
-      this._buf = new Float32Array(this._N * 3);
+      this._buf = new Float32Array(this._N * 5);
       for (let i = 0; i < this._N; i++) this._speed[i] = -1; // dead until first reseed
       this._lastCameraSig = '';
       this._cameraMoving = false;
@@ -303,6 +317,7 @@ function ensureLayerClass(): any {
       if (this._compProgram) gl.deleteProgram(this._compProgram);
       if (this._particleVbo) gl.deleteBuffer(this._particleVbo);
       if (this._quadVbo) gl.deleteBuffer(this._quadVbo);
+      if (this._cornerVbo) gl.deleteBuffer(this._cornerVbo);
       if (this._fbA) { gl.deleteFramebuffer(this._fbA.fb); gl.deleteTexture(this._fbA.tex); }
       if (this._fbB) { gl.deleteFramebuffer(this._fbB.fb); gl.deleteTexture(this._fbB.tex); }
       if (this._colormapTexture) gl.deleteTexture(this._colormapTexture);
@@ -323,10 +338,13 @@ function ensureLayerClass(): any {
       const gl = this._gl as WebGL2RenderingContext;
 
       this._pointsProgram = createProgram(gl, POINTS_VS, POINTS_FS);
-      this._pointsAttrPos = gl.getAttribLocation(this._pointsProgram, 'a_pos');
+      this._pointsAttrPrev = gl.getAttribLocation(this._pointsProgram, 'a_prev');
+      this._pointsAttrCur = gl.getAttribLocation(this._pointsProgram, 'a_cur');
       this._pointsAttrSpeed = gl.getAttribLocation(this._pointsProgram, 'a_speed');
+      this._pointsAttrCorner = gl.getAttribLocation(this._pointsProgram, 'a_corner');
       this._pointsUProjScale = gl.getUniformLocation(this._pointsProgram, 'u_proj_scale');
-      this._pointsUSize = gl.getUniformLocation(this._pointsProgram, 'u_size');
+      this._pointsUViewport = gl.getUniformLocation(this._pointsProgram, 'u_viewport');
+      this._pointsULineWidth = gl.getUniformLocation(this._pointsProgram, 'u_lineWidth');
       this._pointsUOpacity = gl.getUniformLocation(this._pointsProgram, 'u_opacity');
       this._pointsUVmin = gl.getUniformLocation(this._pointsProgram, 'u_vmin');
       this._pointsUVmax = gl.getUniformLocation(this._pointsProgram, 'u_vmax');
@@ -363,6 +381,17 @@ function ensureLayerClass(): any {
       this._quadVbo = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, this._quadVbo);
       gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+
+      // Static per-vertex corner buffer: the two triangles of a unit quad,
+      // each vertex carrying (end, side) — end 0=prev / 1=cur endpoint, side
+      // -1/+1 across the width. The instanced draw expands these against each
+      // particle's prev/cur into a screen-space segment quad.
+      this._cornerVbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._cornerVbo);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        0, -1,   0, 1,   1, -1,
+        1, -1,   0, 1,   1, 1,
+      ]), gl.STATIC_DRAW);
 
       this._fbW = 0;
       this._fbH = 0;
@@ -412,11 +441,16 @@ function ensureLayerClass(): any {
       const maxAge = this._maxAge as number;
       const mx = this._mx as Float64Array;
       const my = this._my as Float64Array;
+      const pmx = this._pmx as Float64Array;
+      const pmy = this._pmy as Float64Array;
       const age = this._age as Uint32Array;
       const speed = this._speed as Float32Array;
       for (let i = 0; i < this._N; i++) {
         mx[i] = seedXMin + Math.random() * spanX;
         my[i] = seedYMin + Math.random() * spanY;
+        // Fresh particle's first segment is a zero-length dot.
+        pmx[i] = mx[i];
+        pmy[i] = my[i];
         // Stagger ages so particles don't all recycle on the same frame.
         age[i] = (Math.random() * maxAge) | 0;
         const s = this._sample(mx[i], my[i], dataZ);
@@ -583,12 +617,25 @@ function ensureLayerClass(): any {
     _step_simulation(this: any, dataZ: number, tlMx: number, tlMy: number, brMx: number, brMy: number, viewZoom: number): void {
       const mx = this._mx as Float64Array;
       const my = this._my as Float64Array;
+      const pmx = this._pmx as Float64Array;
+      const pmy = this._pmy as Float64Array;
       const age = this._age as Uint32Array;
       const speed = this._speed as Float32Array;
       const buf = this._buf as Float32Array;
       const N = this._N as number;
       const maxAge = this._maxAge as number;
       const effScale = this._speedScale * Math.pow(0.5, viewZoom);
+
+      // Per-frame step is FLOORED in device pixels so near-calm particles
+      // keep drifting visibly instead of freezing and popping out (visual
+      // correctness over accuracy — color-by-speed still uses the TRUE
+      // magnitude in `speed[i]`, untouched by the floor). There is NO max
+      // cap: segments connect prev->cur, so a fast particle draws a long
+      // continuous streak rather than skipping pixels. On flat Mercator the
+      // px-per-mercator scale is uniform, so canvas.width / visible-mx-span
+      // is exact. Genuine zero (u==v==0) stays put via the `stepMag > 0` guard.
+      const pxPerMercator = this._canvas.width / Math.max(brMx - tlMx, 1e-9);
+      const minStepMercator = MIN_STEP_PIXELS / pxPerMercator;
 
       const sx = brMx - tlMx;
       const sy = brMy - tlMy;
@@ -604,9 +651,20 @@ function ensureLayerClass(): any {
         if (alive) {
           const s = this._sample(mx[i], my[i], dataZ);
           if (s) {
-            mx[i] += s.u * effScale;
-            my[i] -= s.v * effScale; // +v = north = -my
-            speed[i] = Math.sqrt(s.u * s.u + s.v * s.v);
+            speed[i] = Math.sqrt(s.u * s.u + s.v * s.v); // TRUE speed (color)
+            let dx = s.u * effScale;
+            let dy = -s.v * effScale; // +v = north = -my
+            const stepMag = Math.sqrt(dx * dx + dy * dy);
+            // Floor the step (preserving direction); genuine zero stays put.
+            if (stepMag > 0 && stepMag < minStepMercator) {
+              const sc = minStepMercator / stepMag;
+              dx *= sc;
+              dy *= sc;
+            }
+            pmx[i] = mx[i];
+            pmy[i] = my[i];
+            mx[i] += dx;
+            my[i] += dy;
             age[i]++;
           } else {
             alive = false;
@@ -621,14 +679,21 @@ function ensureLayerClass(): any {
             || my[i] < seedYMin || my[i] > seedYMax) {
           mx[i] = seedXMin + Math.random() * spanX;
           my[i] = seedYMin + Math.random() * spanY;
+          // Fresh particle's first segment is a zero-length dot.
+          pmx[i] = mx[i];
+          pmy[i] = my[i];
           age[i] = (Math.random() * maxAge) | 0;
           const s2 = this._sample(mx[i], my[i], dataZ);
           speed[i] = s2 ? Math.sqrt(s2.u * s2.u + s2.v * s2.v) : -1;
         }
 
-        buf[i * 3]     = mx[i] - tlMx; // Float64 subtract → Float32 store
-        buf[i * 3 + 1] = my[i] - tlMy;
-        buf[i * 3 + 2] = speed[i];
+        // Per instance: prev delta, cur delta, speed (Float64 subtract →
+        // Float32 store). Both endpoints use the same tl origin.
+        buf[i * 5]     = pmx[i] - tlMx;
+        buf[i * 5 + 1] = pmy[i] - tlMy;
+        buf[i * 5 + 2] = mx[i] - tlMx;
+        buf[i * 5 + 3] = my[i] - tlMy;
+        buf[i * 5 + 4] = speed[i];
       }
     },
 
@@ -726,23 +791,40 @@ function ensureLayerClass(): any {
       gl.uniform1f(this._fadeUFade, this._fade);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-      // ----- Pass 2: render particles on top of fbB -----
+      // ----- Pass 2: render particle segments on top of fbB -----
+      // Each particle is ONE instance; the static 6-vertex corner buffer
+      // expands its prev->cur into a screen-space quad in the vertex shader.
       gl.useProgram(this._pointsProgram);
-      gl.bindBuffer(gl.ARRAY_BUFFER, this._particleVbo);
-      gl.enableVertexAttribArray(this._pointsAttrPos);
-      gl.vertexAttribPointer(this._pointsAttrPos, 2, gl.FLOAT, false, 12, 0);
-      gl.enableVertexAttribArray(this._pointsAttrSpeed);
-      gl.vertexAttribPointer(this._pointsAttrSpeed, 1, gl.FLOAT, false, 12, 8);
 
-      // Split-precision projection: origin clip = (-1, 1) (canvas top-
-      // left), scale = (2S/W, -2S/H). Particle attributes are
-      // (mx - tlMx, my - tlMy, speed) — the Float64 subtract on CPU
-      // sidesteps Float32 precision loss at view zooms ≥ 15.
+      // Per-instance attributes (divisor 1): prev (vec2), cur (vec2), speed.
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._particleVbo);
+      const stride = 5 * 4;
+      gl.enableVertexAttribArray(this._pointsAttrPrev);
+      gl.vertexAttribPointer(this._pointsAttrPrev, 2, gl.FLOAT, false, stride, 0);
+      gl.vertexAttribDivisor(this._pointsAttrPrev, 1);
+      gl.enableVertexAttribArray(this._pointsAttrCur);
+      gl.vertexAttribPointer(this._pointsAttrCur, 2, gl.FLOAT, false, stride, 2 * 4);
+      gl.vertexAttribDivisor(this._pointsAttrCur, 1);
+      gl.enableVertexAttribArray(this._pointsAttrSpeed);
+      gl.vertexAttribPointer(this._pointsAttrSpeed, 1, gl.FLOAT, false, stride, 4 * 4);
+      gl.vertexAttribDivisor(this._pointsAttrSpeed, 1);
+
+      // Per-vertex corner (end, side) — divisor 0 (advances per vertex).
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._cornerVbo);
+      gl.enableVertexAttribArray(this._pointsAttrCorner);
+      gl.vertexAttribPointer(this._pointsAttrCorner, 2, gl.FLOAT, false, 0, 0);
+      gl.vertexAttribDivisor(this._pointsAttrCorner, 0);
+
+      // Split-precision projection: clip = (-1, 1) + delta * scale, scale =
+      // (2S/W, -2S/H). Particle attributes are (mx - tlMx, my - tlMy) —
+      // the Float64 subtract on CPU sidesteps Float32 precision loss at
+      // view zooms ≥ 15. u_viewport is the FBO size in device px (used for
+      // the screen-space quad expansion); u_lineWidth is the full segment
+      // width in device px (matches the Mapbox binding's convention — on a
+      // DPR=2 screen a `pointSize: 3` line is 1.5 CSS px wide).
       gl.uniform2f(this._pointsUProjScale, (2 * S) / W_css, -(2 * S) / H_css);
-      // `gl_PointSize` is in device pixels (drawing-buffer pixels) — pass
-      // the raw value to match the Mapbox binding's convention. On a
-      // DPR=2 screen a `pointSize: 3` dot renders as 1.5 CSS px.
-      gl.uniform1f(this._pointsUSize, this._pointSize);
+      gl.uniform2f(this._pointsUViewport, this._fbW, this._fbH);
+      gl.uniform1f(this._pointsULineWidth, this._pointSize);
       gl.uniform1f(this._pointsUOpacity, 1.0);
       gl.uniform1f(this._pointsUVmin, this._vmin);
       gl.uniform1f(this._pointsUVmax, this._vmax);
@@ -759,16 +841,23 @@ function ensureLayerClass(): any {
         gl.uniform1i(this._pointsUColormap, 1);
         gl.activeTexture(gl.TEXTURE0);
       }
-      // Additive (ONE/ONE) for points — matches the Mapbox binding. With
-      // alpha-blend (ONE/ONE_MINUS_SRC_ALPHA) each new dot REPLACES the
-      // existing trail pixel, so soft-edge feathering stays soft → the
-      // visible dot looks bigger than its `gl_PointSize` core. Additive
-      // lets feathered edges accumulate across frames into saturation,
-      // which both thins the apparent dot and brightens trails so motion
-      // reads as faster — the two complaints in one fix.
+      // Additive (ONE/ONE) so feathered edges accumulate across frames into
+      // saturation, brightening trails so motion reads as faster — matches
+      // the Mapbox binding.
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE);
-      gl.drawArrays(gl.POINTS, 0, this._N);
+      gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, this._N);
+      // Reset per-instance divisors immediately: they're VAO state on the
+      // shared default VAO, so a leaked divisor=1 would corrupt the
+      // composite pass below (and the fade pass next frame), which draw
+      // with plain divisor-0 quad arrays.
+      gl.vertexAttribDivisor(this._pointsAttrPrev, 0);
+      gl.vertexAttribDivisor(this._pointsAttrCur, 0);
+      gl.vertexAttribDivisor(this._pointsAttrSpeed, 0);
+      gl.disableVertexAttribArray(this._pointsAttrPrev);
+      gl.disableVertexAttribArray(this._pointsAttrCur);
+      gl.disableVertexAttribArray(this._pointsAttrSpeed);
+      gl.disableVertexAttribArray(this._pointsAttrCorner);
 
       // ----- Pass 3: composite fbB to canvas at user opacity -----
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -799,9 +888,11 @@ function ensureLayerClass(): any {
       this._N = n;
       this._mx = new Float64Array(n);
       this._my = new Float64Array(n);
+      this._pmx = new Float64Array(n);
+      this._pmy = new Float64Array(n);
       this._age = new Uint32Array(n);
       this._speed = new Float32Array(n);
-      this._buf = new Float32Array(n * 3);
+      this._buf = new Float32Array(n * 5);
       for (let i = 0; i < n; i++) this._speed[i] = -1;
       // VBO size changed — re-allocate at the new byteLength.
       const gl = this._gl as WebGL2RenderingContext | null;
