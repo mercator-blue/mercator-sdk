@@ -1,5 +1,13 @@
 # @mercator-blue/sdk
 
+<a href="https://mercator.blue"><img src="https://mercator.blue/og-default.png" alt="mercator: gridded earth data as tiles" width="100%" /></a>
+
+[![npm version](https://img.shields.io/npm/v/@mercator-blue/sdk.svg)](https://www.npmjs.com/package/@mercator-blue/sdk)
+[![npm downloads](https://img.shields.io/npm/dm/@mercator-blue/sdk.svg)](https://www.npmjs.com/package/@mercator-blue/sdk)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/@mercator-blue/sdk.svg)](https://bundlephobia.com/package/@mercator-blue/sdk)
+[![types: TypeScript](https://img.shields.io/npm/types/@mercator-blue/sdk.svg)](https://www.typescriptlang.org/)
+[![license: Apache-2.0](https://img.shields.io/npm/l/@mercator-blue/sdk.svg)](./LICENSE)
+
 Drop-in WebGL map layers for gridded earth data served by 
 [mercator.blue](https://mercator.blue): atmospheric weather, ocean state, 
 air quality, and elevation, decoded from value-encoded PNG tiles into 
@@ -43,7 +51,7 @@ shader and finally animates particle trails over the resulting vector field.
 ### React (react-map-gl)
 
 Using [react-map-gl](https://visgl.github.io/react-map-gl/)? Drop in the
-declarative `<MercatorLayer/>` — it owns the imperative layer's lifecycle
+declarative `<MercatorLayer/>`. It owns the imperative layer's lifecycle
 (create / add / update / remove) for you:
 
 ```tsx
@@ -58,7 +66,7 @@ import { MercatorLayer } from '@mercator-blue/sdk/react/maplibre';
 </Map>;
 ```
 
-Use `@mercator-blue/sdk/react/mapbox` for react-map-gl's Mapbox entry — one
+Use `@mercator-blue/sdk/react/mapbox` for react-map-gl's Mapbox entry. One
 binding covers both hosts. There's also a host-agnostic `useMercatorLayer(map,
 props)` hook (from `@mercator-blue/sdk/react`) for any other React map setup.
 
@@ -78,14 +86,14 @@ and tile boundaries) are on the quickstart pages:
 |------|---------|----------|-------|----------------|
 | **MapLibre GL JS** (4+, 5+) | `/mapbox` | ✅ | ✅ | raster, streamlines, arrows, contours, value-labels, tile-boundaries |
 | **Mapbox GL JS** (3+) | `/mapbox` | ✅ | ✅ | raster, streamlines, arrows, contours, value-labels, tile-boundaries |
-| **Mapbox GL JS** (v2) | `/mapbox` | ✅ | — | raster, streamlines, arrows, contours, value-labels, tile-boundaries |
-| **deck.gl** (9+) | `/deck-gl` | ✅ | — | raster, streamlines, arrows, value-labels, tile-boundaries |
-| **Leaflet** (1.9+) | `/leaflet` | ✅ | — | raster, streamlines, arrows, contours, value-labels, tile-boundaries |
-| **OpenLayers** (10+) | `/openlayers` | ✅ | — | raster, streamlines, arrows, contours, value-labels, tile-boundaries |
+| **Mapbox GL JS** (v2) | `/mapbox` | ✅ | ✗ | raster, streamlines, arrows, contours, value-labels, tile-boundaries |
+| **deck.gl** (9+) | `/deck-gl` | ✅ | ✗ | raster, streamlines, arrows, value-labels, tile-boundaries |
+| **Leaflet** (1.9+) | `/leaflet` | ✅ | ✗ | raster, streamlines, arrows, contours, value-labels, tile-boundaries |
+| **OpenLayers** (10+) | `/openlayers` | ✅ | ✗ | raster, streamlines, arrows, contours, value-labels, tile-boundaries |
 
 The Mapbox/MapLibre binding is the only one with globe support (globe rendering depends on the host's projection system, and only Mapbox v3 and MapLibre 5 expose the projection pipeline to custom layers). The other bindings render flat Mercator regardless of host projection.
 
-For React apps, `@mercator-blue/sdk/react/mapbox` and `@mercator-blue/sdk/react/maplibre` wrap the Mapbox/MapLibre binding as a declarative `<MercatorLayer/>` for [react-map-gl](https://visgl.github.io/react-map-gl/) — same visualizations and globe support, both hosts. A host-agnostic `useMercatorLayer(map, props)` hook is exported from `@mercator-blue/sdk/react` for other React map setups.
+For React apps, `@mercator-blue/sdk/react/mapbox` and `@mercator-blue/sdk/react/maplibre` wrap the Mapbox/MapLibre binding as a declarative `<MercatorLayer/>` for [react-map-gl](https://visgl.github.io/react-map-gl/), with the same visualizations and globe support, both hosts. A host-agnostic `useMercatorLayer(map, props)` hook is exported from `@mercator-blue/sdk/react` for other React map setups.
 
 We don't have a binding for all libraries (Google Maps, Cesium, ArcGIS, etc). For these,
 or for any custom renderer, implement the [value-encoded PNG protocol](https://mercator.blue/docs#tag/tile-encoding) directly - it is a modest piece of GLSL code.
@@ -98,4 +106,4 @@ See the [API docs](https://mercator.blue/docs) for the tile URL shape, auth mode
 
 ## License
 
-Apache 2.0 — see [LICENSE](./LICENSE).
+Apache 2.0. See [LICENSE](./LICENSE).
