@@ -30,15 +30,27 @@
  * colour) read the array directly and are resolution-agnostic.
  */
 
-import type { Colormap, ColormapSpec } from './types';
-import { PALETTES, PALETTE_SIZE } from './palettes';
+import type {
+  Colormap as _Colormap,
+  ColormapStop as _ColormapStop,
+  ColormapSpec as _ColormapSpec,
+} from './types';
+import { PALETTES as _PALETTES, PALETTE_SIZE } from './palettes';
 
-// Re-exported so the public `@mercator-blue/sdk/colormaps` subpath
-// exposes both the registry AND the resolver (and the underlying
-// types, for callers constructing their own palettes) from a single
-// import.
-export { PALETTES } from './palettes';
-export type { Colormap, ColormapStop, ColormapSpec } from './types';
+// Re-exported as documented aliases so the public `@mercator-blue/sdk/
+// colormaps` subpath exposes the registry, the resolver, and the
+// underlying types (for callers constructing their own palettes) from a
+// single import — and so JSR's doc scorecard counts them.
+
+/** The built-in colormap palettes (viridis, turbo, magma, ...), keyed by name.
+ *  Each value is a `Uint8Array` of `PALETTE_SIZE * 3` RGB bytes. */
+export const PALETTES = _PALETTES;
+/** An ordered list of colormap stops — the data form of a palette. */
+export type Colormap = _Colormap;
+/** A single colormap anchor: `[position in 0..1, "#rrggbb"]`. */
+export type ColormapStop = _ColormapStop;
+/** A colormap spec: a built-in palette name or an explicit `{stops}` gradient. */
+export type ColormapSpec = _ColormapSpec;
 
 /** Number of RGB entries in a resolved colormap table (the built-in palette
  *  resolution). {@link resolveColormap} returns `COLORMAP_SIZE * 3` floats. */
@@ -100,17 +112,17 @@ const _warnedUnknownPalettes = new Set<string>();
 export function resolveColormap(spec: ColormapSpec | undefined): Float32Array {
   // Built-in palette name → the canonical 256-entry table.
   if (typeof spec === 'string') {
-    const table = PALETTES[spec];
+    const table = _PALETTES[spec];
     if (table) return normaliseTable(table);
     if (!_warnedUnknownPalettes.has(spec)) {
       _warnedUnknownPalettes.add(spec);
       // eslint-disable-next-line no-console
       console.warn(
         `[@mercator-blue/sdk] Unknown palette "${spec}" — ` +
-        `falling back to viridis. Available palettes: ${Object.keys(PALETTES).join(', ')}.`,
+        `falling back to viridis. Available palettes: ${Object.keys(_PALETTES).join(', ')}.`,
       );
     }
-    return normaliseTable(PALETTES.viridis);
+    return normaliseTable(_PALETTES.viridis);
   }
 
   // Customer { stops } spec → resample onto the COLORMAP_SIZE grid.
@@ -129,5 +141,5 @@ export function resolveColormap(spec: ColormapSpec | undefined): Float32Array {
     return out;
   }
 
-  return normaliseTable(PALETTES.viridis);
+  return normaliseTable(_PALETTES.viridis);
 }

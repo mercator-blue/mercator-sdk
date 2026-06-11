@@ -23,13 +23,15 @@
 
 import { useMap } from 'react-map-gl/mapbox';
 import { useMercatorLayer } from './index';
-import type { MercatorLayerProps } from './index';
+import type { MercatorLayerProps as _MercatorLayerProps } from './index';
 
-export type { MercatorLayerProps } from './index';
+/** Props for the layer, identical to the imperative Mapbox/MapLibre options
+ *  (`viz`, `dataset`, `apiKey`, plus host extras like `beforeId`). */
+export type MercatorLayerProps = _MercatorLayerProps;
 
 /** Props for <MercatorLayer>: the layer options plus an optional `mapId` to
  *  target a specific map when several share a react-map-gl <MapProvider>. */
-export type MercatorLayerComponentProps = MercatorLayerProps & { mapId?: string };
+export type MercatorLayerComponentProps = _MercatorLayerProps & { mapId?: string };
 
 /**
  * Declarative mercator data layer for react-map-gl's Mapbox entry. Renders

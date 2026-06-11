@@ -5,6 +5,17 @@ All notable changes to `@mercator-blue/sdk` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4] - 2026-06-11
+
+### Changed
+
+- Re-exported cross-binding symbols (core types, `discoverLatestItem`,
+  `PALETTES`, `resolveColormap`, the schema `*T` types) are now documented
+  local aliases on each subpath instead of bare `export ... from` re-exports.
+  A bare re-export shows up as an undocumented reference in JSR's doc graph,
+  which was holding the documentation score down; every exported symbol on
+  every entrypoint is now documented (100%). No public name or runtime change.
+
 ## [0.4.3] - 2026-06-11
 
 ### Changed
