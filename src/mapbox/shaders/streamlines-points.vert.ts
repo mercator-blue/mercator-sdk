@@ -1,6 +1,7 @@
-// Particle vertex shader — instanced expanded-line segments.
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `// Particle vertex shader — instanced expanded-line segments.
 //
-// Each particle is ONE instance. The 6 per-vertex `a_corner` values (the
+// Each particle is ONE instance. The 6 per-vertex \`a_corner\` values (the
 // two triangles of a unit quad) expand the particle's prev→cur move into a
 // screen-space quad of width u_lineWidth, with half-width square end-caps so
 // consecutive frames' segments overlap into a continuous trail and a
@@ -98,3 +99,4 @@ void main() {
   v_speed = a_speed;
   v_edge = side;
 }
+`;

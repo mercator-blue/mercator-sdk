@@ -1,8 +1,9 @@
-// Mapbox Terrain-RGB elevation decoder + hypsometric coloring.
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `// Mapbox Terrain-RGB elevation decoder + hypsometric coloring.
 //
 // Decoding:  height_m = -10000 + (R * 65536 + G * 256 + B) * 0.1
 //
-// `u_smooth` selects manual bilinear vs nearest, same convention as
+// \`u_smooth\` selects manual bilinear vs nearest, same convention as
 // raster-scalar / raster-vector. Hardware LINEAR can't be used here:
 // the 24-bit packing means linear filtering across a byte boundary
 // (e.g. R=1,G=255,B=255 -> R=2,G=0,B=0 is +0.1 m) would produce a
@@ -13,7 +14,7 @@
 // dark blue for abyssal depths, light blue near coast, green at low
 // elevations, yellow/tan in foothills, brown in mountains, white snow.
 //
-// Tile-edge seam fix: see raster-scalar.frag — `sampleTile()` reads
+// Tile-edge seam fix: see raster-scalar.frag — \`sampleTile()\` reads
 // from N/S/W/E neighbour textures when a bilinear corner index escapes
 // [0, sz-1], so the two abutting tiles' bilinears actually meet at the
 // shared boundary.
@@ -97,3 +98,4 @@ void main() {
   float h = h00 * w00 + h10 * w10 + h01 * w01 + h11 * w11;
   fragColor = vec4(hypsometric(h) * u_opacity, u_opacity);
 }
+`;

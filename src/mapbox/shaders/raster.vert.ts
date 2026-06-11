@@ -1,11 +1,12 @@
-// Tile-quad vertex shader. Loaded as a raw string and concatenated at
-// runtime with `#version 300 es` + MapLibre's projection prelude.
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `// Tile-quad vertex shader. Loaded as a raw string and concatenated at
+// runtime with \`#version 300 es\` + MapLibre's projection prelude.
 //
-// The GLOBE branch inlines MapLibre's `interpolateProjection`: project
-// mercator → sphere → clip space and set `pos.z = (1 - front) * pos.w`
+// The GLOBE branch inlines MapLibre's \`interpolateProjection\`: project
+// mercator → sphere → clip space and set \`pos.z = (1 - front) * pos.w\`
 // so visible quads land in NDC-z ∈ [0, 1] and back-facing parts clip at
 // the far plane. Same formula the basemap uses; works at every zoom
-// including the extreme regime where `pos.w` shrinks to ~0.003.
+// including the extreme regime where \`pos.w\` shrinks to ~0.003.
 
 in vec2 a_pos;
 uniform vec4 u_tile;
@@ -24,3 +25,4 @@ void main() {
 #endif
   v_uv = a_pos;
 }
+`;

@@ -1,4 +1,5 @@
-// Contour-line vertex shader — expanded triangle geometry.
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `// Contour-line vertex shader — expanded triangle geometry.
 //
 // Mirrors tile-bounds.vert: each logical line segment is a thin
 // screen-space quad whose two endpoints share BOTH endpoint positions
@@ -55,3 +56,4 @@ void main() {
 
   gl_Position = vec4(basePos.xy + offsetClip, basePos.z, basePos.w);
 }
+`;

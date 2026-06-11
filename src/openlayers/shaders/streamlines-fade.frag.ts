@@ -1,6 +1,7 @@
-#version 300 es
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `#version 300 es
 // Fade pass: reads the previous frame's trail texture, multiplies by
-// `u_fade`, subtracts a quantum floor (~0.6/255) so faint pixels actually
+// \`u_fade\`, subtracts a quantum floor (~0.6/255) so faint pixels actually
 // reach 0 instead of getting stuck at the uint8 1/255 quantum — the
 // documented "permanent veil" hazard from CLAUDE.md.
 precision highp float;
@@ -13,3 +14,4 @@ void main() {
   c = max(vec4(0.0), c - vec4(0.6 / 255.0));
   fragColor = c;
 }
+`;

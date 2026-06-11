@@ -1,4 +1,5 @@
-#version 300 es
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `#version 300 es
 // Mitre-joined polyline vertex shader for contour rendering.
 //
 // The hairpin case (polyline doubles back) is critical to guard:
@@ -80,3 +81,4 @@ void main() {
   );
   gl_Position = vec4(clip, 0.0, 1.0);
 }
+`;

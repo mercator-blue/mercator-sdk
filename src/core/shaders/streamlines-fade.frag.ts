@@ -1,5 +1,6 @@
-// Trail-buffer fade pass. Reads the previous frame's trail FBO, multiplies
-// by `u_fade` (e.g. 0.99 for slow decay), then subtracts ~half a uint8
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `// Trail-buffer fade pass. Reads the previous frame's trail FBO, multiplies
+// by \`u_fade\` (e.g. 0.99 for slow decay), then subtracts ~half a uint8
 // quantum before writing.
 //
 // The trail FBO is RGBA uint8 — channels quantize to 1/255 steps. Once a
@@ -19,3 +20,4 @@ void main() {
   vec4 c = texture2D(u_tex, v_uv) * u_fade;
   gl_FragColor = max(c - vec4(0.6 / 255.0), vec4(0.0));
 }
+`;

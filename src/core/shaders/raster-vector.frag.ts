@@ -1,8 +1,9 @@
-// Vector-encoded tile decoder. Reads `vector_rg_ba` u/v components from
-// R+G and B+A byte pairs, decodes each via `(hi*256 + lo) * scale + offset`,
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `// Vector-encoded tile decoder. Reads \`vector_rg_ba\` u/v components from
+// R+G and B+A byte pairs, decodes each via \`(hi*256 + lo) * scale + offset\`,
 // then colors by speed using viridis.
 //
-// `u_smooth` selects manual NaN-aware bilinear vs nearest. Same reasoning
+// \`u_smooth\` selects manual NaN-aware bilinear vs nearest. Same reasoning
 // as raster-scalar: hardware LINEAR on byte pairs blends across byte
 // rollovers and decodes to garbage. We texelFetch 4 corners, decode each
 // (u, v) pair, then bilinearly interpolate the decoded vectors. Speed is
@@ -10,7 +11,7 @@
 // would underestimate near vortices where direction reverses but |v|
 // stays high.
 //
-// Tile-edge seam fix: see raster-scalar.frag — `sampleTile()` here is
+// Tile-edge seam fix: see raster-scalar.frag — \`sampleTile()\` here is
 // identical and consults neighbour textures when a bilinear corner index
 // escapes [0, sz-1].
 
@@ -100,3 +101,4 @@ void main() {
   float alpha = u_opacity * coverage;
   fragColor = vec4(colormap(t) * alpha, alpha);
 }
+`;

@@ -36,9 +36,9 @@
  *     alpha are not supported; validity is a hard cutoff at band4 < 0.5.
  */
 
-import WebGLTileLayer from 'ol/layer/WebGLTile';
-import ImageTileSource from 'ol/source/ImageTile';
-import type { ExpressionValue } from 'ol/expr/expression';
+import WebGLTileLayer from 'ol/layer/WebGLTile.js';
+import ImageTileSource from 'ol/source/ImageTile.js';
+import type { ExpressionValue } from 'ol/expr/expression.js';
 
 import { resolveColormap, COLORMAP_SIZE } from '../core/colormaps';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';

@@ -1,10 +1,11 @@
-// Scalar-encoded tile decoder. Reads `rg16_fixed` values from R+G bytes
-// of a tile texture, decodes via `(R*256 + G) * scale + offset`, then
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `// Scalar-encoded tile decoder. Reads \`rg16_fixed\` values from R+G bytes
+// of a tile texture, decodes via \`(R*256 + G) * scale + offset\`, then
 // applies a diverging blue↔red colormap (cool/warm palette).
 //
 // Alpha channel is the validity mask: tex.a < 0.5 ⇒ no-data, discard.
 //
-// `u_smooth` selects between two sampling modes:
+// \`u_smooth\` selects between two sampling modes:
 //   1.0 = manual bilinear in decoded-value space. Hardware LINEAR can't be
 //         used on rg16_fixed because it would blend R and G bytes naively
 //         across byte boundaries — at R=0x80,G=0xFF → R=0x81,G=0x00 (a
@@ -15,7 +16,7 @@
 //         corners get weight 0 and the remaining weights are renormalised.
 //   0.0 = nearest. Reproduces the original blocky look one texel per fragment.
 //
-// Tile-edge seam fix: the 4 bilinear corners are read via `sampleTile()`,
+// Tile-edge seam fix: the 4 bilinear corners are read via \`sampleTile()\`,
 // which transparently reads from a neighbour tile (u_texN/S/W/E) when the
 // corner index lands outside [0, sz-1]. Without this, edge fragments
 // collapse to the row/column at the clamp and the two abutting tiles'
@@ -36,7 +37,7 @@ uniform float u_scale, u_offset, u_vmin, u_vmax, u_opacity, u_smooth;
 // position. Formula: t = log(1 + value - vmin) / log(1 + vmax - vmin).
 uniform float u_log_scale;
 // Discard threshold. Pixels with decoded value at or below this are
-// dropped (fragment is `discard`ed), so the basemap shows through where
+// dropped (fragment is \`discard\`ed), so the basemap shows through where
 // the dataset has effectively "nothing" (e.g. dry land for precipitation).
 // Set to a very negative sentinel when no threshold is configured.
 uniform float u_transparent_below;
@@ -118,7 +119,7 @@ void main() {
   // Bilinear weights × per-texel coverage (alpha in [0, 1]). The encoder
   // emits a graduated alpha byte at the source-grid level, so coastal tile
   // pixels carry a partial-coverage value rather than a binary on/off.
-  // Multiplying spatial weight by alpha (instead of `step(0.5, alpha)`)
+  // Multiplying spatial weight by alpha (instead of \`step(0.5, alpha)\`)
   // propagates that gradient through the shader bilinear and yields a
   // continuous edge fade at source-grid resolution.
   float w00 = (1.0 - frac.x) * (1.0 - frac.y) * t00.a;
@@ -155,3 +156,4 @@ void main() {
   alpha *= coverage;
   fragColor = vec4(colormap(t) * alpha, alpha);
 }
+`;

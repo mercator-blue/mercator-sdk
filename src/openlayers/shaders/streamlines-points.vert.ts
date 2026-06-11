@@ -1,8 +1,9 @@
-#version 300 es
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `#version 300 es
 // Particle vertex shader — instanced expanded-line segments (OpenLayers).
 // Each particle (per world copy) is ONE instance; the 6 per-vertex
-// `a_corner` values (two triangles of a unit quad) expand the particle's
-// prev->cur move into a screen-space quad of width `u_point_size·SCALE`,
+// \`a_corner\` values (two triangles of a unit quad) expand the particle's
+// prev->cur move into a screen-space quad of width \`u_point_size·SCALE\`,
 // with half-width square end-caps so consecutive frames' segments overlap
 // into a continuous trail and a stationary particle still renders as a dot.
 // Drawing the per-frame MOVE as a connected quad (rather than a GL_POINT)
@@ -50,3 +51,4 @@ void main() {
   v_speed_t = a_speed_t;
   v_edge = side;
 }
+`;

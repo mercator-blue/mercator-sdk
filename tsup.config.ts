@@ -17,11 +17,9 @@ import { defineConfig } from 'tsup';
 //   src/deck-gl/             — its layer subclasses
 //   src/schemas/index.ts     — Zod schemas + inferred types
 //
-// The `.vert` / `.frag` text loader resolves shader imports to string
-// literals at build time — works in tsup/esbuild here AND in Vite
-// (which honours the loader hint via the `?raw` suffix automatically
-// when configured). Consumers see the strings already inlined; no
-// special bundler config required on their end.
+// Shaders are plain .ts modules that export their GLSL as a string constant
+// (e.g. src/mapbox/shaders/raster.vert.ts). No .vert/.frag text loader is
+// needed, so the source is bundler-independent and publishable to JSR / Deno.
 export default defineConfig({
   entry: {
     index: 'src/index.ts',
@@ -66,12 +64,4 @@ export default defineConfig({
   // libs have no transitive deps and are too small to be worth a
   // separate `mvt-decode` chunk; bundling them is the simpler trade.
   noExternal: ['@mapbox/vector-tile', 'pbf'],
-  loader: {
-    '.frag': 'text',
-    '.vert': 'text',
-  },
-  // Note: copying hand-written shader types into dist happens via the
-  // chained `node scripts/copy-shader-types.mjs` in the npm `build`
-  // script — not here. tsup's `onSuccess` fires before the DTS phase
-  // clears its output dir, so anything we copy in onSuccess gets wiped.
 });

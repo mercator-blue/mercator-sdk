@@ -1,7 +1,8 @@
-// Arrow line fragment shader. Outputs a viridis-ramp colour based on
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `// Arrow line fragment shader. Outputs a viridis-ramp colour based on
 // the incoming speed (m/s), mapped from 0..u_speedRef across the five
 // preset stops. u_speedRef matches the host's STAC
-// `mercator:visualization.vmax` so wind (~40 m/s) and currents (~2 m/s)
+// \`mercator:visualization.vmax\` so wind (~40 m/s) and currents (~2 m/s)
 // both use their full colour range — without this, currents bunched
 // into the first ramp segment and rendered as a single dark colour.
 
@@ -30,3 +31,4 @@ vec3 speedToColor(float speed) {
 void main() {
   fragColor = vec4(speedToColor(v_speed), 0.9);
 }
+`;

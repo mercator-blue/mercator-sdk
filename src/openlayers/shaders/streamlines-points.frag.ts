@@ -1,4 +1,5 @@
-#version 300 es
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `#version 300 es
 // Particle fragment shader — expanded-line segments (OpenLayers). White,
 // or a 256×1 RGBA palette LUT sampled at the particle's speed_t when
 // colour-by-speed is on. v_edge is the signed perpendicular coord across
@@ -19,3 +20,4 @@ void main() {
   vec3 col = mix(vec3(1.0), rampCol, u_color_by_speed);
   fragColor = vec4(col * a, a);  // premultiplied — matches the ONE/ONE blend
 }
+`;

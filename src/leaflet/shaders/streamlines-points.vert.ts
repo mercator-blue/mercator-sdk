@@ -1,7 +1,8 @@
-#version 300 es
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `#version 300 es
 // Particle vertex shader — instanced expanded-line segments (Leaflet,
 // Mercator-only). Each particle is ONE instance; the 6 per-vertex
-// `a_corner` values (two triangles of a unit quad) expand the particle's
+// \`a_corner\` values (two triangles of a unit quad) expand the particle's
 // prev->cur move into a screen-space quad of width u_lineWidth, with
 // half-width square end-caps so consecutive frames' segments overlap into
 // a continuous trail and a stationary particle still renders as a dot.
@@ -71,3 +72,4 @@ void main() {
   v_speed = a_speed;
   v_edge = side;
 }
+`;

@@ -1,7 +1,8 @@
-#version 300 es
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `#version 300 es
 // Compositor: full-screen pass that scales the offscreen RGBA framebuffer
 // by the layer's opacity before writing to the canvas. Necessary because
-// rendering tiles directly with `u_opacity < 1` and per-tile alpha blending
+// rendering tiles directly with \`u_opacity < 1\` and per-tile alpha blending
 // stacks alpha where parent + child tiles overlap (e.g. while a finer tile
 // loads in and its parent is still in the queue for sibling targets),
 // producing a visibly brighter overlap region until the parent is dropped.
@@ -15,3 +16,4 @@ void main() {
   // the alpha-premultiplied invariant.
   fragColor = texture(u_src, v_uv) * u_opacity;
 }
+`;

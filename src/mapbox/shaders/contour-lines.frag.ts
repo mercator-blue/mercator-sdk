@@ -1,4 +1,5 @@
-// Contour-line fragment shader.
+// GLSL source as a string (bundler-independent; no text loader needed).
+export default `// Contour-line fragment shader.
 //
 // Single uniform color + opacity. The casing pass uses a white/light
 // color at partial opacity; the main pass uses a dark color at full
@@ -16,3 +17,4 @@ uniform float u_opacity;
 void main() {
   fragColor = vec4(u_color.rgb, u_color.a * u_opacity);
 }
+`;
