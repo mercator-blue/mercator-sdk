@@ -10,7 +10,21 @@ import { z } from './_register.js';
  * the contour value; renderers filter by interval to display the
  * desired density.
  */
-export const MercatorContour = z
+/** Output shape of {@link MercatorContour} — declared explicitly so the
+ *  exported schema has a fast type for JSR. */
+type MercatorContourShape = {
+  url_template: string;
+  source_layer: string;
+  presets: number[];
+  default_interval: number;
+  unit: string;
+  minzoom: number;
+  maxzoom: number;
+  user_filter_min_zoom: number;
+  coarsest_interval: number;
+};
+
+export const MercatorContour: z.ZodType<MercatorContourShape> = z
   .object({
     url_template: z.string().describe(
       'URL template with `{z}/{x}/{y}` placeholders. Tile bytes are ' +

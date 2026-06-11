@@ -9,7 +9,11 @@ import { z } from './_register.js';
  * https://github.com/radiantearth/stac-spec/blob/master/commons/links.md
  * for the canonical list of `rel` values.
  */
-export const Link = z
+/** Output shape of {@link Link} — declared explicitly so the exported schema
+ *  has a fast type for JSR (a bare Zod schema export is a "slow type"). */
+type LinkShape = { rel: string; href: string; type?: string; title?: string };
+
+export const Link: z.ZodType<LinkShape> = z
   .object({
     rel: z.string().describe(
       'The relation of the target document to the current one. Common ' +

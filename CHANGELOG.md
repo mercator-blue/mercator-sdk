@@ -5,6 +5,17 @@ All notable changes to `@mercator-blue/sdk` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.5] - 2026-06-11
+
+### Changed
+
+- The public API is now free of JSR "slow types". Exported Zod schemas carry
+  explicit `z.ZodType<Shape>` annotations (TypeScript enforces the annotation
+  matches the schema, so there is no drift), and the deck.gl layer methods
+  (`shouldUpdateState`, `renderLayers`) have explicit return types. JSR now
+  publishes without `--allow-slow-types`, and a future slow-type regression
+  fails CI. No public name, type, or runtime change.
+
 ## [0.4.4] - 2026-06-11
 
 ### Changed

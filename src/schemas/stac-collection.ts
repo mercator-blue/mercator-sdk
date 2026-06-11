@@ -37,7 +37,24 @@ const Extent = z
  * See https://github.com/radiantearth/stac-spec/blob/master/collection-spec/collection-spec.md
  * for the canonical definition.
  */
-export const StacCollection = z
+/** Output shape of {@link StacCollection} — declared explicitly so the exported
+ *  schema has a fast type for JSR. */
+type StacCollectionShape = {
+  type: 'Collection';
+  stac_version: string;
+  id: string;
+  title?: string;
+  description: string;
+  license?: string;
+  extent: {
+    spatial: { bbox: number[][] };
+    temporal: { interval: Array<Array<string | null>> };
+  };
+  summaries?: Record<string, unknown>;
+  links: Link[];
+};
+
+export const StacCollection: z.ZodType<StacCollectionShape> = z
   .object({
     type: z.literal('Collection').describe('Always `"Collection"`.'),
     stac_version: z.string().describe('STAC spec version, e.g. `"1.0.0"`.'),

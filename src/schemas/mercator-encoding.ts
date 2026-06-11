@@ -10,7 +10,19 @@ import { z } from './_register.js';
  * the integration gotchas (NEAREST sampling, premultiplied alpha,
  * canvas-2D round-trip pitfalls).
  */
-export const MercatorEncoding = z
+/** Output shape of {@link MercatorEncoding} — declared explicitly so the
+ *  exported schema has a fast type for JSR. */
+type MercatorEncodingShape = {
+  id: string;
+  kind: 'rg16_fixed' | 'vector_rg_ba' | 'image_rgba' | 'mapbox_rgb';
+  scale: number;
+  offset: number;
+  unit: string;
+  components?: string[];
+  observed_range?: Record<string, [number, number]>;
+};
+
+export const MercatorEncoding: z.ZodType<MercatorEncodingShape> = z
   .object({
     id: z.string().describe(
       'Stable identifier for this encoding, unique within the item. ' +

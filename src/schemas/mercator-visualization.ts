@@ -9,7 +9,11 @@ import { z } from './_register.js';
  *
  * Lives on each STAC Item as `properties.mercator:visualization`.
  */
-export const ColormapSpec = z
+/** Output shape of {@link ColormapSpec} — declared explicitly so the exported
+ *  schema has a fast type for JSR. */
+type ColormapSpecShape = string | { stops: [number, string][] };
+
+export const ColormapSpec: z.ZodType<ColormapSpecShape> = z
   .union([
     z.string().describe('Preset name (e.g. "viridis", "rdbu", "turbo").'),
     z
@@ -35,7 +39,19 @@ export const ColormapSpec = z
  * colormap, value range, scale type, and streamline speed scale that
  * renderers use for out-of-the-box appearance.
  */
-export const MercatorVisualization = z
+/** Output shape of {@link MercatorVisualization} — declared explicitly so the
+ *  exported schema has a fast type for JSR. */
+type MercatorVisualizationShape = {
+  particle_speed_scale?: number;
+  vmin: number;
+  vmax: number;
+  colormap?: ColormapSpecShape;
+  scale_type?: 'linear' | 'log';
+  transparent_below?: number;
+  alpha_by_value?: boolean;
+};
+
+export const MercatorVisualization: z.ZodType<MercatorVisualizationShape> = z
   .object({
     particle_speed_scale: z
       .number()

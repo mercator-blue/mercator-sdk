@@ -9,7 +9,7 @@
 // Dataset-independent: no apiKey, no STAC discovery. The Mapbox overlay
 // nominally takes those for API symmetry but doesn't use them either.
 
-import { CompositeLayer, type DefaultProps, type Color } from '@deck.gl/core';
+import { CompositeLayer, type DefaultProps, type Color, type LayersList } from '@deck.gl/core';
 import { PathLayer, TextLayer } from '@deck.gl/layers';
 
 import {
@@ -72,11 +72,11 @@ export class MercatorTileBoundariesLayer extends CompositeLayer<MercatorTileBoun
   // `somethingChanged` is broader and includes viewport, which is what
   // TileLayer uses for the same reason.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  shouldUpdateState({ changeFlags }: any) {
+  shouldUpdateState({ changeFlags }: any): boolean {
     return changeFlags.somethingChanged;
   }
 
-  renderLayers() {
+  renderLayers(): LayersList {
     const viewport = this.context.viewport;
     if (!viewport) return [];
 

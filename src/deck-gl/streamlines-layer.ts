@@ -476,7 +476,7 @@ export class MercatorStreamlinesLayer extends Layer<MercatorStreamlinesLayerProp
   }: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     changeFlags: any;
-  }) {
+  }): boolean {
     return changeFlags.somethingChanged;
   }
 

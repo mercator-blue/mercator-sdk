@@ -8,7 +8,18 @@ import { Link } from './link.js';
  * See https://github.com/radiantearth/stac-spec/blob/master/catalog-spec/catalog-spec.md
  * for the canonical definition.
  */
-export const StacCatalog = z
+/** Output shape of {@link StacCatalog} — declared explicitly so the exported
+ *  schema has a fast type for JSR. */
+type StacCatalogShape = {
+  type: 'Catalog';
+  stac_version: string;
+  id: string;
+  title?: string;
+  description: string;
+  links: Link[];
+};
+
+export const StacCatalog: z.ZodType<StacCatalogShape> = z
   .object({
     type: z.literal('Catalog').describe('Always `"Catalog"`.'),
     stac_version: z.string().describe('STAC spec version, e.g. `"1.0.0"`.'),

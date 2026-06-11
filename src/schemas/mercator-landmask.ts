@@ -9,7 +9,15 @@ import { z } from './_register.js';
  * across every cycle of every dataset. The Worker serves it from a
  * single PMTiles archive at `tiles/landmask/landmask.pmtiles`.
  */
-export const MercatorLandmask = z
+/** Output shape of {@link MercatorLandmask} — declared explicitly so the
+ *  exported schema has a fast type for JSR. */
+type MercatorLandmaskShape = {
+  url_template: string;
+  accepts: number[];
+  maxzoom: number;
+};
+
+export const MercatorLandmask: z.ZodType<MercatorLandmaskShape> = z
   .object({
     url_template: z.string().describe(
       'URL template with `{z}/{x}/{y}` placeholders. Tile bytes are ' +

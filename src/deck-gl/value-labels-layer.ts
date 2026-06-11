@@ -15,7 +15,7 @@
 // same instance-reconciliation + viewport-debounce + tile-load-coalesce
 // machinery as `arrows-layer.ts` applies (see that file for rationale).
 
-import { CompositeLayer, type DefaultProps, type Color } from '@deck.gl/core';
+import { CompositeLayer, type DefaultProps, type Color, type LayersList } from '@deck.gl/core';
 import { TextLayer } from '@deck.gl/layers';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
 import { withApiKey, DEFAULT_CATALOG_URL } from '../core/urls';
@@ -138,7 +138,7 @@ export class MercatorValueLabelsLayer extends CompositeLayer<MercatorValueLabels
   // Default shouldUpdateState skips viewport changes; we need the lattice
   // recomputed on pan/zoom.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  shouldUpdateState({ changeFlags }: any) {
+  shouldUpdateState({ changeFlags }: any): boolean {
     return changeFlags.somethingChanged;
   }
 
@@ -174,7 +174,7 @@ export class MercatorValueLabelsLayer extends CompositeLayer<MercatorValueLabels
     }
   }
 
-  renderLayers() {
+  renderLayers(): LayersList {
     const item = this._getCachedItem();
     if (!item) return [];
 

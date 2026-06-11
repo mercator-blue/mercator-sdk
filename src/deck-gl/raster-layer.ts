@@ -15,7 +15,7 @@
 // idiomatic data flow (Layer constructor is sync; data load is
 // internal) better than a `.create()` factory.
 
-import { CompositeLayer, type DefaultProps } from '@deck.gl/core';
+import { CompositeLayer, type DefaultProps, type LayersList } from '@deck.gl/core';
 import { TileLayer } from '@deck.gl/geo-layers';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
 import { withApiKey, DEFAULT_CATALOG_URL } from '../core/urls';
@@ -138,7 +138,7 @@ export class MercatorRasterLayer extends CompositeLayer<MercatorRasterLayerProps
     }
   }
 
-  renderLayers() {
+  renderLayers(): LayersList {
     const item = this._getCachedItem();
     if (!item) return [];
 

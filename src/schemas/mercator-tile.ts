@@ -6,7 +6,16 @@ import { z } from './_register.js';
  * their texture caches and clamp zoom requests to what's actually
  * published.
  */
-export const MercatorTile = z
+/** Output shape of {@link MercatorTile} — declared explicitly so the exported
+ *  schema has a fast type for JSR. */
+type MercatorTileShape = {
+  minzoom: number;
+  maxzoom: number;
+  size: number;
+  projection: string;
+};
+
+export const MercatorTile: z.ZodType<MercatorTileShape> = z
   .object({
     minzoom: z.number().int().describe(
       'Lowest published zoom level for the value-encoded raster pyramid.',

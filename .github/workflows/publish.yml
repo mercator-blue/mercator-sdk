@@ -39,6 +39,7 @@ jobs:
       - run: npm ci
       # No token needed: jsr detects the GitHub Actions OIDC identity. The
       # package's GitHub repository must be linked in the JSR package settings
-      # for this to be authorized. --allow-slow-types: the Zod schemas trip
-      # JSR's slow-type analysis (see jsr.json).
-      - run: npx jsr publish --allow-slow-types
+      # for this to be authorized. The public API is free of slow types
+      # (exported Zod schemas carry explicit `z.ZodType<Shape>` annotations),
+      # so no --allow-slow-types flag — a regression now fails the publish.
+      - run: npx jsr publish

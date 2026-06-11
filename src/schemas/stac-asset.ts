@@ -37,7 +37,26 @@ const RasterBand = z
  * asset — it's a `rel: "xyz"` link from the STAC Web Map Links
  * extension (many URLs referenced by template, not a single file).
  */
-export const StacAsset = z
+/** Output shape of {@link StacAsset} — declared explicitly so the exported
+ *  schema has a fast type for JSR. */
+type StacAssetShape = {
+  href: string;
+  type: string;
+  title?: string;
+  roles: string[];
+  'proj:epsg'?: number;
+  'raster:bands'?: Array<{
+    name: string;
+    data_type: string;
+    unit?: string;
+    scale?: number;
+    offset?: number;
+    statistics?: { minimum: number; maximum: number };
+  }>;
+  'file:size'?: number;
+};
+
+export const StacAsset: z.ZodType<StacAssetShape> = z
   .object({
     href: z.string().describe(
       'URL of the asset. Relative to the Item document. ' +

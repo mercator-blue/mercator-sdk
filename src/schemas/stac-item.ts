@@ -16,7 +16,24 @@ import { MercatorTile } from './mercator-tile.js';
  * namespaced fields (see the `view`, `eo`, `processing` extensions and
  * many more). Consumers should ignore anything they don't recognise.
  */
-const StacItemProperties = z
+/** Output shape of {@link StacItemProperties} — declared explicitly so the
+ *  exported type has a fast type for JSR. */
+type StacItemPropertiesShape = {
+  datetime: string | null;
+  'forecast:reference_datetime'?: string;
+  'forecast:horizon'?: string;
+  'mercator:variable': string;
+  'mercator:long_name': string;
+  'mercator:encoding': MercatorEncoding;
+  'mercator:tile': MercatorTile;
+  'mercator:visualization'?: MercatorVisualization;
+  'mercator:landmask'?: MercatorLandmask;
+  'mercator:contour'?: MercatorContour;
+  'mercator:featured'?: boolean;
+  [k: string]: unknown;
+};
+
+const StacItemProperties: z.ZodType<StacItemPropertiesShape> = z
   .object({
     datetime: z
       .string()
@@ -97,7 +114,22 @@ const StacItemProperties = z
  * for the canonical STAC Item definition. The fields below override
  * descriptions for mercator-specific behaviour and extensions.
  */
-export const StacItem = z
+/** Output shape of {@link StacItem} — declared explicitly so the exported
+ *  schema has a fast type for JSR. */
+type StacItemShape = {
+  type: 'Feature';
+  stac_version: string;
+  stac_extensions?: string[];
+  id: string;
+  collection: string;
+  bbox: number[];
+  geometry: Record<string, unknown>;
+  properties: StacItemPropertiesShape;
+  assets: Record<string, StacAsset>;
+  links: Link[];
+};
+
+export const StacItem: z.ZodType<StacItemShape> = z
   .object({
     type: z
       .literal('Feature')
