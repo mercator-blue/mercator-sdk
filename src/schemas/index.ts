@@ -1,3 +1,13 @@
+/**
+ * `@mercator-blue/sdk/schemas`: Zod schemas for the STAC catalog and the
+ * `mercator:*` STAC extension namespace.
+ *
+ * The single source of truth for every wire shape: each schema yields a
+ * runtime validator, an inferred TypeScript type, and an OpenAPI component.
+ * Pure data with no DOM or WebGL, so it runs in any JavaScript runtime.
+ *
+ * @module
+ */
 // Public surface for `@mercator-blue/sdk/schemas`.
 //
 // Zod schemas + their inferred TypeScript types for every wire shape

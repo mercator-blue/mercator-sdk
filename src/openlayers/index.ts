@@ -1,3 +1,13 @@
+/**
+ * `@mercator-blue/sdk/openlayers`: the OpenLayers 8+ binding.
+ *
+ * Exports ol/layer subclasses for value-encoded tiles: raster, streamlines,
+ * arrows, contours, value labels and tile boundaries. The raster layer uses
+ * OpenLayers' built-in WebGLTile style expressions (no hand-written GLSL).
+ * Mercator only.
+ *
+ * @module
+ */
 // Public entry for `@mercator-blue/sdk/openlayers`.
 //
 // OpenLayers 8+ binding. The raster layer is an `ol/layer/WebGLTile`

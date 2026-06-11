@@ -1,3 +1,13 @@
+/**
+ * `@mercator-blue/sdk/deck-gl`: the deck.gl 9+ binding.
+ *
+ * Exports deck.gl Layer subclasses for value-encoded tiles
+ * (MercatorRasterLayer, MercatorStreamlinesLayer, MercatorArrowsLayer,
+ * MercatorValueLabelsLayer, MercatorTileBoundariesLayer), typically used via
+ * `@deck.gl/mapbox`'s MapboxOverlay. Flat Mercator only.
+ *
+ * @module
+ */
 // Public entry for `@mercator-blue/sdk/deck-gl`.
 //
 // deck.gl 9+ binding. Each layer (raster / streamlines / arrows / values /

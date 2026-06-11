@@ -1,3 +1,12 @@
+/**
+ * `@mercator-blue/sdk/leaflet`: the Leaflet 1.x binding.
+ *
+ * Exports L.Layer subclasses for value-encoded tiles: raster, streamlines,
+ * arrows, contours, value labels and tile boundaries (WebGL2 for raster and
+ * streamlines, Canvas2D for the rest). Mercator only, no globe.
+ *
+ * @module
+ */
 // Public entry for `@mercator-blue/sdk/leaflet`.
 //
 // Leaflet 1.x binding. Each layer (raster / streamlines / arrows / values /

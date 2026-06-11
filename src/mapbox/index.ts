@@ -1,3 +1,14 @@
+/**
+ * `@mercator-blue/sdk/mapbox`: the Mapbox GL JS and MapLibre binding.
+ *
+ * Exports {@link MercatorLayer}, a custom-WebGL layer that decodes
+ * value-encoded tiles on the GPU, plus the per-visualization option types.
+ * One binding serves both hosts (it detects the host at runtime).
+ * Visualizations: raster, streamlines, arrows, contours, value labels and
+ * tile boundaries, with 3D globe support on MapLibre 5 and Mapbox v3.
+ *
+ * @module
+ */
 // Public API surface for `@mercator-blue/sdk/mapbox` — custom-WebGL
 // layers and overlays for Mapbox GL JS and MapLibre.
 //

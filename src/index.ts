@@ -1,3 +1,28 @@
+/**
+ * Host-agnostic core of `@mercator-blue/sdk`: render mercator's value-encoded
+ * earth-data tiles (weather, ocean, air quality, elevation) on a web map.
+ *
+ * This entry exports the framework-independent pieces: STAC catalog discovery,
+ * colormaps, the value-encoded tile pixel reader, and shared types. For the
+ * actual map layers, import a host binding instead: `@mercator-blue/sdk/mapbox`,
+ * `/leaflet`, `/openlayers`, `/deck-gl` or `/react`.
+ *
+ * @example
+ * ```ts
+ * import maplibregl from 'maplibre-gl';
+ * import { MercatorLayer } from '@mercator-blue/sdk/mapbox';
+ *
+ * const map = new maplibregl.Map({ container: 'map', style: '...' });
+ * map.on('load', async () => {
+ *   const layer = await MercatorLayer.create({
+ *     dataset: 'wind10m', apiKey: 'mk_...', viz: 'streamlines',
+ *   });
+ *   layer.addTo(map);
+ * });
+ * ```
+ *
+ * @module
+ */
 // Public API surface for `@mercator-blue/sdk` — the host-agnostic core.
 //
 // Host bindings live at subpaths:

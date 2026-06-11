@@ -1,4 +1,15 @@
 /**
+ * `@mercator-blue/sdk/colormaps`: named colormap palettes and the resolver.
+ *
+ * Exports `PALETTES` (the built-in palettes: viridis, turbo, magma, plasma,
+ * inferno and more) and {@link resolveColormap}, which returns a 256-entry RGB
+ * lookup table for a built-in name or a custom stop list. Shared by every
+ * binding's shaders. Pure data, no DOM or WebGL.
+ *
+ * @module
+ */
+
+/**
  * Resolver for value-encoded raster colormaps.
  *
  * A "colormap spec" is one of:

@@ -1,3 +1,13 @@
+/**
+ * `@mercator-blue/sdk/react/mapbox`: a declarative `<MercatorLayer/>` for
+ * react-map-gl's Mapbox entry (`react-map-gl/mapbox`).
+ *
+ * Reads the map from react-map-gl context and manages the imperative layer's
+ * lifecycle for you. Same visualizations and globe support as the Mapbox
+ * binding.
+ *
+ * @module
+ */
 // <MercatorLayer> for react-map-gl's Mapbox entry (`react-map-gl/mapbox`).
 //
 // Renders nothing; it manages a mercator.blue layer on the nearest <Map>

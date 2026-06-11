@@ -1,3 +1,13 @@
+/**
+ * `@mercator-blue/sdk/react/maplibre`: a declarative `<MercatorLayer/>` for
+ * react-map-gl's MapLibre entry (`react-map-gl/maplibre`).
+ *
+ * Reads the map from react-map-gl context and manages the imperative layer's
+ * lifecycle for you. Same visualizations and globe support as the MapLibre
+ * binding.
+ *
+ * @module
+ */
 // <MercatorLayer> for react-map-gl's MapLibre entry (`react-map-gl/maplibre`).
 //
 // Identical to the Mapbox component except it reads the map from
