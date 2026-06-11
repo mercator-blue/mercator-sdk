@@ -43,4 +43,5 @@ export const Link = z
     },
   });
 
+/** Inferred type of a STAC `Link` object (rel + href, plus optional type/title). */
 export type Link = z.infer<typeof Link>;

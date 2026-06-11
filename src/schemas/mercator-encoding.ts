@@ -67,4 +67,5 @@ export const MercatorEncoding = z
     },
   });
 
+/** Inferred type of the `mercator:encoding` value-encoding spec. */
 export type MercatorEncoding = z.infer<typeof MercatorEncoding>;

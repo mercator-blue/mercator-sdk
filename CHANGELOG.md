@@ -5,6 +5,14 @@ All notable changes to `@mercator-blue/sdk` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2026-06-11
+
+### Changed
+
+- Added JSDoc to every exported symbol across all entrypoints (layer factories,
+  option types, schema types, the React components, discovery and colormap
+  helpers). Docs-only; no code or runtime change.
+
 ## [0.4.2] - 2026-06-11
 
 ### Changed

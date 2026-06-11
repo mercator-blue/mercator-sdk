@@ -35,4 +35,5 @@ export const MercatorTile = z
     },
   });
 
+/** Inferred type of the `mercator:tile` property (size, zoom range, projection). */
 export type MercatorTile = z.infer<typeof MercatorTile>;

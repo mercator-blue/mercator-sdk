@@ -69,4 +69,5 @@ export const MercatorContour = z
     },
   });
 
+/** Inferred type of the `mercator:contour` property (MVT URL + interval presets). */
 export type MercatorContour = z.infer<typeof MercatorContour>;

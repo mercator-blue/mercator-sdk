@@ -27,6 +27,8 @@ export interface LeafletHostExtras {
   pane?: string;
 }
 
+/** Options for the Leaflet binding: the portable {@link MercatorLayerOptions}
+ *  union plus Leaflet host extras (`pane`). */
 export type LeafletMercatorLayerOptions = MercatorLayerOptions & LeafletHostExtras;
 
 // Concrete L.Layer; not strongly typed because we read L off `globalThis`.
@@ -128,4 +130,24 @@ function setOptions(
   }
 }
 
+/**
+ * The Leaflet binding entry point. A namespace of factory functions for
+ * building mercator.blue data layers as Leaflet `L.Layer` subclasses
+ * (Mercator-only; no globe).
+ *
+ * - `create(opts)` — discover the dataset's latest STAC item, then build the
+ *   layer. Returns a promise.
+ * - `fromItem(opts, item)` — build synchronously from an already-discovered
+ *   item (or `null` for `viz: 'bounds'`).
+ * - `setOptions(layer, partial)` — apply a live tweak (opacity, colormap, ...)
+ *   without rebuilding the layer.
+ *
+ * @example
+ * ```ts
+ * const layer = await MercatorLayer.create({
+ *   dataset: 'currents', apiKey: 'mk_...', viz: 'streamlines',
+ * });
+ * layer.addTo(map);
+ * ```
+ */
 export const MercatorLayer = { create, fromItem, setOptions };

@@ -1,6 +1,6 @@
 {
   "name": "@mercator-blue/sdk",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Drop-in WebGL map layers for gridded earth data (weather, ocean, air quality, elevation) served by mercator.blue. MapLibre, Mapbox GL JS, Leaflet, OpenLayers, deck.gl.",
   "license": "Apache-2.0",
   "type": "module",
@@ -133,9 +133,9 @@
     "zod": "^4.4.3"
   },
   "peerDependencies": {
-    "maplibre-gl": ">=4.0.0",
     "@deck.gl/core": ">=9.0.0",
     "@deck.gl/layers": ">=9.0.0",
+    "maplibre-gl": ">=4.0.0",
     "ol": ">=8.0.0",
     "react": ">=18.0.0",
     "react-map-gl": ">=7.1.0"

@@ -40,7 +40,9 @@ import { PALETTES, PALETTE_SIZE } from './palettes';
 export { PALETTES } from './palettes';
 export type { Colormap, ColormapStop, ColormapSpec } from './types';
 
-export const COLORMAP_SIZE = PALETTE_SIZE;
+/** Number of RGB entries in a resolved colormap table (the built-in palette
+ *  resolution). {@link resolveColormap} returns `COLORMAP_SIZE * 3` floats. */
+export const COLORMAP_SIZE: number = PALETTE_SIZE;
 
 type RGB = [number, number, number];
 /** A stop with the hex already decoded to 0..255 RGB; sampleStops works

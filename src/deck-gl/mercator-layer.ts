@@ -131,4 +131,25 @@ function setOptions(): never {
   );
 }
 
+/**
+ * The deck.gl binding entry point. A namespace of factory functions for
+ * building mercator.blue data layers as deck.gl `Layer` instances, used
+ * through `@deck.gl/mapbox`'s `MapboxOverlay` (Mercator-only; no globe).
+ *
+ * - `create(opts)` — discover the dataset's latest STAC item, then build the
+ *   layer. Returns a promise.
+ * - `fromItem(opts, item)` — build synchronously from an already-discovered
+ *   item (or `null` for `viz: 'bounds'`).
+ * - `setOptions` — NOT supported on this binding. deck.gl reconciles by the
+ *   layers array, so to change options construct a new layer with the same
+ *   `id` and replace it; deck.gl diffs the props for you.
+ *
+ * @example
+ * ```ts
+ * const layer = await MercatorLayer.create({
+ *   dataset: 'wind10m', apiKey: 'mk_...', viz: 'arrows',
+ * });
+ * overlay.setProps({ layers: [layer] });
+ * ```
+ */
 export const MercatorLayer = { create, fromItem, setOptions };

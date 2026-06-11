@@ -86,4 +86,5 @@ export const StacAsset = z
       '`file:` prefixed properties.',
   });
 
+/** Inferred type of a STAC `Asset` object (href + roles + media type). */
 export type StacAsset = z.infer<typeof StacAsset>;

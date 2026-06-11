@@ -30,6 +30,11 @@ export const ColormapSpec = z
       '"viridis" on unknown preset names (and warns once to the console).',
   });
 
+/**
+ * Zod schema for the `mercator:visualization` STAC property: default
+ * colormap, value range, scale type, and streamline speed scale that
+ * renderers use for out-of-the-box appearance.
+ */
 export const MercatorVisualization = z
   .object({
     particle_speed_scale: z
@@ -89,5 +94,7 @@ export const MercatorVisualization = z
     },
   });
 
+/** Inferred type of a colormap spec: a preset name or an inline gradient. */
 export type ColormapSpec = z.infer<typeof ColormapSpec>;
+/** Inferred type of the `mercator:visualization` property. */
 export type MercatorVisualization = z.infer<typeof MercatorVisualization>;

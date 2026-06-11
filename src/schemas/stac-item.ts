@@ -156,5 +156,7 @@ export const StacItem = z
       'tile-template link.',
   });
 
+/** Inferred type of a STAC Item's `properties` object (incl. the `mercator:*` fields). */
 export type StacItemProperties = z.infer<typeof StacItemProperties>;
+/** Inferred type of a STAC `Item` (one cycle/forecast-hour of a dataset). */
 export type StacItem = z.infer<typeof StacItem>;

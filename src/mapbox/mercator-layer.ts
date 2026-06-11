@@ -213,6 +213,7 @@ export class MercatorLayer {
     }
   }
 
+  /** The wrapped inner layer that carries the live-update setters, if any. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _innerWithSetters(): any {
     return this.innerCustomLayer ?? this.inner ?? {};
@@ -236,6 +237,7 @@ export class MercatorLayer {
 
   // ---- Internal dispatch helpers ---------------------------------------
 
+  /** Build the underlying raster custom-layer from the discovered item + opts. */
   private _buildRaster(): unknown {
     if (this.opts.viz !== 'raster') throw new Error('@mercator-blue/sdk/mapbox: unreachable');
     const opts = this.opts;
@@ -266,6 +268,7 @@ export class MercatorLayer {
     } as any);
   }
 
+  /** Build the underlying streamlines custom-layer from the discovered item + opts. */
   private _buildStreamlines(): unknown {
     if (this.opts.viz !== 'streamlines') throw new Error('@mercator-blue/sdk/mapbox: unreachable');
     const opts = this.opts;
@@ -302,6 +305,7 @@ export class MercatorLayer {
     } as any);
   }
 
+  /** Resolve the arrows-overlay option object from the discovered item + opts. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _arrowsOpts(): any {
     if (this.opts.viz !== 'arrows') throw new Error('@mercator-blue/sdk/mapbox: unreachable');
@@ -329,6 +333,7 @@ export class MercatorLayer {
     };
   }
 
+  /** Resolve the contours-overlay option object from the discovered item + opts. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _contoursOpts(): any {
     if (this.opts.viz !== 'contours') throw new Error('@mercator-blue/sdk/mapbox: unreachable');
@@ -362,6 +367,7 @@ export class MercatorLayer {
     };
   }
 
+  /** Resolve the value-labels-overlay option object from the discovered item + opts. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _valueLabelsOpts(): any {
     if (this.opts.viz !== 'values') throw new Error('@mercator-blue/sdk/mapbox: unreachable');
@@ -400,6 +406,7 @@ export class MercatorLayer {
     };
   }
 
+  /** Resolve the tile-boundaries-overlay option object from the opts. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _boundsOpts(): any {
     if (this.opts.viz !== 'bounds') throw new Error('@mercator-blue/sdk/mapbox: unreachable');
@@ -413,6 +420,7 @@ export class MercatorLayer {
     };
   }
 
+  /** Return the discovered STAC item, throwing if it is null (only `bounds` allows null). */
   private _requireItem(): DiscoveredItem {
     if (!this.item) {
       throw new Error(

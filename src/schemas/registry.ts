@@ -26,6 +26,12 @@ import { StacItem } from './stac-item.js';
 import { StacCollection } from './stac-collection.js';
 import { StacCatalog } from './stac-catalog.js';
 
+/**
+ * Build an `OpenAPIRegistry` with every mercator STAC + `mercator:*` schema
+ * registered under its canonical name. The OpenAPI build script
+ * (`scripts/build_openapi.mjs`) calls this to emit the `components.schemas`
+ * block of the published spec.
+ */
 export function createSchemaRegistry(): OpenAPIRegistry {
   const r = new OpenAPIRegistry();
 

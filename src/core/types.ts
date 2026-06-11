@@ -125,6 +125,7 @@ interface MercatorColormapOptions {
 /** `viz: 'raster'` — colormapped raster of the decoded scalar / magnitude / altitude. */
 export interface MercatorRasterOptions
   extends MercatorDataLayerOptions, MercatorColormapOptions {
+  /** Visualization discriminant. Must be `'raster'`. */
   viz: 'raster';
   /** Bilinear interpolation in decoded-value space. `true` for smooth
    *  shading, `false` for source-pixel-honest blocky display. Default: `true`. */
@@ -147,6 +148,7 @@ export interface MercatorRasterOptions
  *  Requires `vector_rg_ba` encoding. */
 export interface MercatorStreamlinesOptions
   extends MercatorDataLayerOptions, MercatorColormapOptions {
+  /** Visualization discriminant. Must be `'streamlines'`. */
   viz: 'streamlines';
   /** Number of simulated particles. Default: 8000. */
   particleCount?: number;
@@ -168,6 +170,7 @@ export interface MercatorStreamlinesOptions
  *  Requires `vector_rg_ba` encoding. */
 export interface MercatorArrowsOptions
   extends MercatorDataLayerOptions, MercatorColormapOptions {
+  /** Visualization discriminant. Must be `'arrows'`. */
   viz: 'arrows';
   /** Pin sampling tile zoom regardless of map zoom. Useful for pyramid-
    *  consistency tests across zoom levels. */
@@ -182,6 +185,7 @@ export interface MercatorArrowsOptions
 /** `viz: 'contours'` — labelled isolines from a precomputed MVT pyramid.
  *  Requires the dataset to have `mercator:contour` published. */
 export interface MercatorContoursOptions extends MercatorDataLayerOptions {
+  /** Visualization discriminant. Must be `'contours'`. */
   viz: 'contours';
   /** Initial contour interval in the dataset's encoded unit (e.g. 5 →
    *  every 5 °C). Must match one of the pyramid's preset intervals.
@@ -202,6 +206,7 @@ export interface MercatorContoursOptions extends MercatorDataLayerOptions {
  *  The "temperatures-on-a-grid" look. For vector datasets, shows the
  *  speed MAGNITUDE; for `mapbox_rgb`, the altitude. */
 export interface MercatorValueLabelsOptions extends MercatorDataLayerOptions {
+  /** Visualization discriminant. Must be `'values'`. */
   viz: 'values';
   /** Pin sampling tile zoom regardless of map zoom. */
   lockZoom?: number;
@@ -217,6 +222,7 @@ export interface MercatorValueLabelsOptions extends MercatorDataLayerOptions {
 /** `viz: 'bounds'` — slippy-XYZ tile-boundary debug overlay. No dataset
  *  needed — draws the mercator tile grid at the current map zoom. */
 export interface MercatorTileBoundariesOptions extends MercatorBaseOptions {
+  /** Visualization discriminant. Must be `'bounds'`. */
   viz: 'bounds';
   /** Lower bound on tile z. Default 0. */
   minzoom?: number;
@@ -259,11 +265,18 @@ export type MercatorLayerOptions =
  * to wrap or extend the layer.
  */
 export interface CustomLayerInterface {
+  /** Unique layer id within the host map. */
   readonly id: string;
+  /** Always `'custom'` — marks this as a host custom layer. */
   readonly type: 'custom';
+  /** `'2d'` for flat-Mercator-only layers, `'3d'` for globe-aware ones. */
   readonly renderingMode?: '2d' | '3d';
+  /** Called by the host when the layer is added: receives the map and GL context. */
   onAdd?(map: unknown, gl: WebGL2RenderingContext): void;
+  /** Called by the host when the layer is removed: release GL resources here. */
   onRemove?(map: unknown, gl: WebGL2RenderingContext): void;
+  /** Optional pre-pass invoked before the main render (e.g. to update an FBO). */
   prerender?(gl: WebGL2RenderingContext, args: unknown): void;
+  /** Main draw call, invoked once per frame by the host. */
   render(gl: WebGL2RenderingContext, args: unknown): void;
 }

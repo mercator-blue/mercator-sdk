@@ -31,6 +31,13 @@ export type { MercatorLayerProps } from './index';
  *  target a specific map when several share a react-map-gl <MapProvider>. */
 export type MercatorLayerComponentProps = MercatorLayerProps & { mapId?: string };
 
+/**
+ * Declarative mercator data layer for react-map-gl's Mapbox entry. Renders
+ * nothing; drop it inside a `<Map>` and it manages the underlying layer's
+ * create / add / update / remove lifecycle. Identity props (`viz`, `dataset`,
+ * `apiKey`, `id`, `catalogUrl`, `beforeId`) rebuild the layer; other prop
+ * changes apply live.
+ */
 export function MercatorLayer(props: MercatorLayerComponentProps): null {
   const maps = useMap();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

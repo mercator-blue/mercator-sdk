@@ -41,4 +41,5 @@ export const MercatorLandmask = z
     },
   });
 
+/** Inferred type of the `mercator:landmask` property (mask tile URL + accepted codes). */
 export type MercatorLandmask = z.infer<typeof MercatorLandmask>;

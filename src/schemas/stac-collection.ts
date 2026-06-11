@@ -76,4 +76,5 @@ export const StacCollection = z
       'find available cycles; the newest is at the end of the array.',
   });
 
+/** Inferred type of a STAC `Collection` (one dataset's shared metadata + extent). */
 export type StacCollection = z.infer<typeof StacCollection>;

@@ -32,4 +32,5 @@ export const StacCatalog = z
       '`links[rel=child]` to find every available dataset.',
   });
 
+/** Inferred type of the root STAC `Catalog` (links out to each collection). */
 export type StacCatalog = z.infer<typeof StacCatalog>;
