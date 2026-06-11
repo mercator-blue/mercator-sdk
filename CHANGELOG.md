@@ -5,6 +5,19 @@ All notable changes to `@mercator-blue/sdk` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-06-11
+
+### Changed
+
+- Shaders are now plain `.ts` modules that export their GLSL as a string,
+  removing the build-time text-loader dependency. The published npm bundle is
+  byte-for-byte unchanged; the change makes the source bundler-independent.
+
+### Added
+
+- Published to JSR as `@mercator-blue/sdk` (TypeScript source). Browser
+  runtime: the rendering bindings require WebGL2 and a host map library.
+
 ## [0.2.0] - 2026-06-08
 
 ### Added

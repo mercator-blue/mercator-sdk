@@ -1,6 +1,6 @@
 {
   "name": "@mercator-blue/sdk",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Drop-in WebGL map layers for gridded earth data (weather, ocean, air quality, elevation) served by mercator.blue. MapLibre, Mapbox GL JS, Leaflet, OpenLayers, deck.gl.",
   "license": "Apache-2.0",
   "type": "module",
