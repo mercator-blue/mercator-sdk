@@ -1,4 +1,4 @@
-name: Publish to npm
+name: Publish
 
 on:
   push:
@@ -6,11 +6,11 @@ on:
       - 'v*'
 
 jobs:
-  publish:
+  npm:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write  # enables npm provenance
+      id-token: write # enables npm provenance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,3 +22,23 @@ jobs:
       - run: npm publish --access=public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  jsr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # enables JSR OIDC publishing + transparency-log provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      # Dependencies must be installed: JSR resolves bare imports (e.g. ol/*)
+      # against node_modules when publishing the TypeScript source.
+      - run: npm ci
+      # No token needed: jsr detects the GitHub Actions OIDC identity. The
+      # package's GitHub repository must be linked in the JSR package settings
+      # for this to be authorized. --allow-slow-types: the Zod schemas trip
+      # JSR's slow-type analysis (see jsr.json).
+      - run: npx jsr publish --allow-slow-types
