@@ -16,11 +16,11 @@ import {
   QUAD_VS,
   STREAMLINES_FADE_FS as FADE_FS,
   STREAMLINES_COMPOSITE_FS as COMPOSITE_FS,
+  STREAMLINES_SIM_VS as SIM_VS,
+  STREAMLINES_SIM_FS as SIM_FS,
 } from '../../core/shaders/index';
 import POINTS_VS from './streamlines-points.vert';
 import POINTS_FS from './streamlines-points.frag';
-import SIM_VS from './streamlines-sim.vert';
-import SIM_FS from './streamlines-sim.frag';
 import ARROWS_VS from './arrows.vert';
 import ARROWS_FS from './arrows.frag';
 import TILE_BOUNDS_VS from './tile-bounds.vert';

@@ -16,6 +16,8 @@ import RASTER_ELEVATION_FS from './raster-elevation.frag';
 import QUAD_VS from './quad.vert';
 import STREAMLINES_FADE_FS from './streamlines-fade.frag';
 import STREAMLINES_COMPOSITE_FS from './streamlines-composite.frag';
+import STREAMLINES_SIM_VS from './streamlines-sim.vert';
+import STREAMLINES_SIM_FS from './streamlines-sim.frag';
 import CONTOUR_LINES_VS from './contour-lines.vert';
 import CONTOUR_LINES_FS from './contour-lines.frag';
 
@@ -32,6 +34,12 @@ export {
   // names — separate work to harmonize.
   STREAMLINES_FADE_FS,
   STREAMLINES_COMPOSITE_FS,
+  // ES 3.00. GPU particle-simulation pass (fullscreen-quad VS + advection
+  // FS over the ping-pong position texture). Projection-agnostic — every
+  // binding's GPU sim shares these; only the points VS that reads the
+  // resulting positions is per-binding (projection differs).
+  STREAMLINES_SIM_VS,
+  STREAMLINES_SIM_FS,
   // ES 3.00. Used by Leaflet + OpenLayers contour line renderers (Mapbox
   // has a different attribute layout — a_p0/a_p1/a_t/a_side/a_bold
   // instead of a_pos/a_prev/a_next — and keeps its own shader).
