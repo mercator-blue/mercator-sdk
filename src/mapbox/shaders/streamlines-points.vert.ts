@@ -95,6 +95,14 @@ void main() {
   vec2 localCur = decodeLocal(pCur);
   vec2 a_prev = u_seedOrigin + decodeLocal(pPrev) * u_seedSpan - u_origin;
   vec2 a_cur  = u_seedOrigin + localCur * u_seedSpan - u_origin;
+  // Teleport guard: a just-reseeded/recycled particle can pair a prev and cur
+  // that are far apart (different generations across the ping-pong). Real
+  // per-frame steps are a tiny fraction of the bbox, so collapse anything past
+  // a quarter-bbox to a dot (prev = cur) instead of a world-spanning line.
+  if (abs(a_cur.x - a_prev.x) > 0.25 * u_seedSpan.x ||
+      abs(a_cur.y - a_prev.y) > 0.25 * u_seedSpan.y) {
+    a_prev = a_cur;
+  }
   float a_speed = dead ? -1.0 : speedAt(localCur);
 #endif
   // Dead-particle sentinel: push all 6 vertices outside clip space so the
