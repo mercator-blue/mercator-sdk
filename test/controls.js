@@ -139,6 +139,74 @@ const FORMATS = {
 };
 
 /**
+ * Mount a fixed top-right FPS / frame-time overlay and start a rAF loop that
+ * measures the browser's animation cadence. Shows rolling-average fps, the
+ * average frame interval in ms, and the worst (max) interval in the window so
+ * jank shows up even when the average is pinned at the display refresh rate.
+ * Idempotent: a second call is a no-op. Returns the overlay element.
+ */
+export function mountFps() {
+  const EXISTING = document.getElementById('fps-meter');
+  if (EXISTING) return EXISTING;
+
+  const el = document.createElement('div');
+  el.id = 'fps-meter';
+  el.style.cssText = [
+    'position:fixed', 'z-index:9999',
+    'font:12px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace',
+    'background:rgba(0,0,0,0.65)', 'color:#fff', 'padding:6px 10px',
+    'border-radius:6px', 'pointer-events:none', 'white-space:pre',
+  ].join(';');
+  el.textContent = '— fps';
+  document.body.appendChild(el);
+
+  // Sit beside the page's #zoom-readout (top-right) rather than over it.
+  // Tops aligned; the fps meter is parked to the left of the zoom chip with
+  // a small gap. `place()` is re-run each paint because the zoom text width
+  // shifts a little (e.g. "z 1.50" vs "z 12.34"). Falls back to a plain
+  // top-right corner when no zoom readout exists.
+  const zoom = document.getElementById('zoom-readout');
+  const place = () => {
+    if (zoom) {
+      const cs = getComputedStyle(zoom);
+      const right = parseFloat(cs.right) || 12;
+      el.style.top = cs.top || '12px';
+      el.style.right = `${right + zoom.offsetWidth + 8}px`;
+    } else {
+      el.style.top = '12px';
+      el.style.right = '12px';
+    }
+  };
+  place();
+
+  const WINDOW = 60;        // samples kept for the rolling stats
+  const deltas = [];
+  let prev = null;
+  let lastPaint = 0;        // throttle DOM writes to ~4 Hz
+
+  const frame = (t) => {
+    if (prev !== null) {
+      const dt = t - prev;
+      deltas.push(dt);
+      if (deltas.length > WINDOW) deltas.shift();
+      if (t - lastPaint > 250 && deltas.length) {
+        lastPaint = t;
+        let sum = 0, max = 0;
+        for (const d of deltas) { sum += d; if (d > max) max = d; }
+        const avg = sum / deltas.length;
+        const fps = avg > 0 ? 1000 / avg : 0;
+        el.textContent = `${fps.toFixed(0)} fps  ${avg.toFixed(1)} ms (max ${max.toFixed(1)})`;
+        place();
+      }
+    }
+    prev = t;
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+  return el;
+}
+
+/**
  * Render the requested control groups into `spec.container`, build the
  * palette dropdown from `spec.palettes`, and wire slider value-readouts.
  *
@@ -182,4 +250,7 @@ export function mountControls(spec) {
       el.addEventListener('input', () => { out.textContent = fmt(el.value); });
     }
   }
+
+  // Shared FPS / frame-time overlay (top-right). Idempotent.
+  mountFps();
 }
