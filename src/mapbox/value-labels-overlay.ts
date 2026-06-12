@@ -30,6 +30,7 @@ import {
 } from '../core/mercator';
 import { loadTilePixels } from '../core/tile-pixel-reader';
 import type { EncodingKind } from '../core/types';
+import { expandTileUrl } from '../core/urls';
 
 const SOURCE_ID = '__mercator_value_labels_src';
 const LAYER_ID = '__mercator_value_labels';
@@ -150,15 +151,9 @@ async function loadTile(
     // status === 'error' — fall through and retry.
   }
   const promise = (async (): Promise<LoadedTileEntry> => {
-    const url = tileUrlTemplate
-      .replace('{z}', String(z))
-      .replace('{x}', String(x))
-      .replace('{y}', String(y));
+    const url = expandTileUrl(tileUrlTemplate, z, x, y);
     const maskUrl = landmaskUrlTemplate
-      ? landmaskUrlTemplate
-          .replace('{z}', String(z))
-          .replace('{x}', String(x))
-          .replace('{y}', String(y))
+      ? expandTileUrl(landmaskUrlTemplate, z, x, y)
       : null;
     const [dataPx, maskPx] = await Promise.all([
       loadTilePixels(url),

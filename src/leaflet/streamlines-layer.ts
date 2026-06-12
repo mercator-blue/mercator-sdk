@@ -36,7 +36,7 @@ import { loadTilePixels } from '../core/tile-pixel-reader';
 import { resolveColormap } from '../core/colormaps';
 import { uploadColormapTexture } from '../core/colormap-texture';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
-import { withApiKey, absolutiseUrl, DEFAULT_CATALOG_URL } from '../core/urls';
+import { withApiKey, absolutiseUrl, expandTileUrl, DEFAULT_CATALOG_URL } from '../core/urls';
 import type { ColormapSpec, MercatorStreamlinesOptions } from '../core/types';
 import { createProgram } from '../core/webgl-helpers';
 
@@ -104,10 +104,7 @@ async function loadTile(
   if (cache.has(key)) return;
   cache.set(key, { status: 'loading' });
   try {
-    const url = tileUrlTemplate
-      .replace('{z}', String(z))
-      .replace('{x}', String(x))
-      .replace('{y}', String(y));
+    const url = expandTileUrl(tileUrlTemplate, z, x, y);
     const { width: W, height: H, pixels } = await loadTilePixels(url);
     const u = new Float32Array(W * H);
     const v = new Float32Array(W * H);
@@ -134,10 +131,7 @@ async function loadMaskTile(
   if (cache.has(key)) return;
   cache.set(key, { status: 'loading' });
   try {
-    const url = urlTemplate
-      .replace('{z}', String(z))
-      .replace('{x}', String(x))
-      .replace('{y}', String(y));
+    const url = expandTileUrl(urlTemplate, z, x, y);
     const { width: W, height: H, pixels } = await loadTilePixels(url);
     const mask = new Uint8Array(W * H);
     for (let i = 0; i < W * H; i++) mask[i] = pixels[i * 4];

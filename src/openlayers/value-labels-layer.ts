@@ -49,7 +49,7 @@ import type { FrameState } from 'ol/Map.js';
 
 import { loadTilePixels } from '../core/tile-pixel-reader';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
-import { withApiKey, absolutiseUrl, DEFAULT_CATALOG_URL } from '../core/urls';
+import { withApiKey, absolutiseUrl, expandTileUrl, DEFAULT_CATALOG_URL } from '../core/urls';
 import type { MercatorValueLabelsOptions } from '../core/types';
 
 import { HALF_MERCATOR, WORLD_EXT_3857 } from '../core/mercator';
@@ -160,15 +160,9 @@ function buildLayer(opts: MercatorValueLabelsLayerOpts, item: DiscoveredItem): L
       // binding; a transient 5xx shouldn't permanently kill a tile).
     }
     const promise = (async (): Promise<LoadedTile> => {
-      const url = tileUrlTemplate
-        .replace('{z}', String(z))
-        .replace('{x}', String(wrappedTx))
-        .replace('{y}', String(ty));
+      const url = expandTileUrl(tileUrlTemplate, z, wrappedTx, ty);
       const maskUrl = landmaskUrlTemplate
-        ? landmaskUrlTemplate
-            .replace('{z}', String(z))
-            .replace('{x}', String(wrappedTx))
-            .replace('{y}', String(ty))
+        ? expandTileUrl(landmaskUrlTemplate, z, wrappedTx, ty)
         : null;
       const [dataPx, maskPx] = await Promise.all([
         loadTilePixels(url),

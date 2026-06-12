@@ -34,7 +34,7 @@ import {
 import { resolveColormap } from '../core/colormaps';
 import { uploadColormapTexture } from '../core/colormap-texture';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
-import { withApiKey, DEFAULT_CATALOG_URL } from '../core/urls';
+import { withApiKey, expandTileUrl, DEFAULT_CATALOG_URL } from '../core/urls';
 import { posMod } from '../core/mercator';
 import type { ColormapSpec, EncodingKind, MercatorRasterOptions } from '../core/types';
 import { createProgram } from '../core/webgl-helpers';
@@ -485,10 +485,7 @@ function ensureLayerClass(): any {
         this._renderViewport();
       };
       img.onerror = () => { entry.status = 'error'; };
-      img.src = this._tileUrlTemplate
-        .replace('{z}', String(z))
-        .replace('{x}', String(tx))
-        .replace('{y}', String(y));
+      img.src = expandTileUrl(this._tileUrlTemplate, z, tx, y);
     },
 
     /** For each target tile, walk up the pyramid until we find a loaded

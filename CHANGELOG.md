@@ -5,6 +5,23 @@ All notable changes to `@mercator-blue/sdk` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.6] - 2026-06-12
+
+### Added
+
+- `sampleColormapCss(palette, t)` on `@mercator-blue/sdk/colormaps`: sample a
+  resolved colormap to an `rgb(...)` string for Canvas2D. (Previously an
+  internal copy in two bindings.)
+
+### Changed
+
+- Internal cleanup, no behavior change: the `{z}/{x}/{y}` tile-URL templating
+  that was copy-pasted at 21 sites is now a single `expandTileUrl` helper in
+  core; the Canvas2D colormap sampler is shared via `sampleColormapCss`;
+  redundant module-comment blocks on the entrypoints were trimmed (the
+  `@module` JSDoc is unchanged); and two internal-only mercator helpers are no
+  longer exported. Net -180 source lines.
+
 ## [0.4.5] - 2026-06-11
 
 ### Changed

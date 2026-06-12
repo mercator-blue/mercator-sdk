@@ -1,6 +1,6 @@
 {
   "name": "@mercator-blue/sdk",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "license": "Apache-2.0",
   "exports": {
     ".": "./src/index.ts",
@@ -15,6 +15,9 @@
     "./react/maplibre": "./src/react/maplibre.tsx"
   },
   "publish": {
-    "exclude": ["test", "tsup.config.ts"]
+    "exclude": [
+      "test",
+      "tsup.config.ts"
+    ]
   }
 }

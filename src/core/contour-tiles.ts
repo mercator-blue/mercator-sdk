@@ -23,6 +23,7 @@
 
 import { VectorTile } from '@mapbox/vector-tile';
 import Protobuf from 'pbf';
+import { expandTileUrl } from './urls';
 
 // LRU bounded by tile count. ~tile cap matters because each parsed tile
 // holds an array of Float64 coords proportional to its feature count;
@@ -92,10 +93,7 @@ export class ContourTileCache {
     if (this.pending.has(k)) return false;
 
     this.pending.add(k);
-    const url = this.urlTemplate
-      .replace('{z}', String(z))
-      .replace('{x}', String(x))
-      .replace('{y}', String(y));
+    const url = expandTileUrl(this.urlTemplate, z, x, y);
 
     const promise = fetch(url)
       .then(async (res) => {

@@ -15,6 +15,7 @@ import { resolveColormap } from '../core/colormaps';
 import { uploadColormapTexture } from '../core/colormap-texture';
 import type { ColormapSpec, EncodingKind } from '../core/types';
 import { normalizeRenderArgs, type NormalisedRenderArgs } from './host-adapter';
+import { expandTileUrl } from '../core/urls';
 
 // GLSL bodies are statically inlined as string constants by the shader
 // barrel (see ./shaders/index.ts). All shaders here are GLSL 3.00 ES —
@@ -557,10 +558,7 @@ export function createDecodedRasterLayer(opts: RasterLayerOpts) {
         this.map.triggerRepaint();
       };
       img.onerror = () => { entry.status = 'error'; };
-      img.src = opts.tileUrlTemplate
-        .replace('{z}', String(z))
-        .replace('{x}', String(tx))
-        .replace('{y}', String(y));
+      img.src = expandTileUrl(opts.tileUrlTemplate, z, tx, y);
     },
 
     buildDrawQueue(this: RasterLayerThis, targets: TileCoord[]): QueueEntry[] {

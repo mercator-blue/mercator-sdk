@@ -143,3 +143,18 @@ export function resolveColormap(spec: ColormapSpec | undefined): Float32Array {
 
   return normaliseTable(_PALETTES.viridis);
 }
+
+/** Sample a resolved colormap (`Float32Array` of COLORMAP_SIZE x RGB in
+ *  [0, 1], from {@link resolveColormap}) at `t` in [0, 1] and return an
+ *  `rgb(...)` string ready for Canvas2D `fillStyle` / `strokeStyle`. */
+export function sampleColormapCss(palette: Float32Array, t: number): string {
+  const stops = palette.length / 3;
+  const c = Math.max(0, Math.min(1, t)) * (stops - 1);
+  const i = Math.floor(c);
+  const j = Math.min(stops - 1, i + 1);
+  const a = c - i;
+  const r = palette[i * 3]     * (1 - a) + palette[j * 3]     * a;
+  const g = palette[i * 3 + 1] * (1 - a) + palette[j * 3 + 1] * a;
+  const b = palette[i * 3 + 2] * (1 - a) + palette[j * 3 + 2] * a;
+  return `rgb(${(r * 255) | 0}, ${(g * 255) | 0}, ${(b * 255) | 0})`;
+}

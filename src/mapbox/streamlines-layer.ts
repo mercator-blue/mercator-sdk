@@ -16,6 +16,7 @@ import { loadTilePixels } from '../core/tile-pixel-reader';
 import { resolveColormap } from '../core/colormaps';
 import { uploadColormapTexture } from '../core/colormap-texture';
 import type { ColormapSpec } from '../core/types';
+import { expandTileUrl } from '../core/urls';
 import {
   normalizeRenderArgs,
   type NormalisedRenderArgs,
@@ -563,10 +564,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
         // independently in sampleLandmask so the renderer can use a finer
         // landmask zoom than the data tile's own maxzoom (HYCOM is z=5,
         // landmask pyramid is built to z=8).
-        const url = opts.tileUrlTemplate
-          .replace('{z}', String(z))
-          .replace('{x}', String(x))
-          .replace('{y}', String(y));
+        const url = expandTileUrl(opts.tileUrlTemplate, z, x, y);
         const { width: W, height: H, pixels: data } = await loadTilePixels(url);
         const u = new Float32Array(W * H);
         const v = new Float32Array(W * H);
@@ -602,10 +600,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       if (this.maskTiles.has(key)) return;
       this.maskTiles.set(key, { status: 'loading' });
       try {
-        const url = opts.landmaskUrlTemplate
-          .replace('{z}', String(z))
-          .replace('{x}', String(x))
-          .replace('{y}', String(y));
+        const url = expandTileUrl(opts.landmaskUrlTemplate, z, x, y);
         const { width: W, height: H, pixels } = await loadTilePixels(url);
         // Compact to a single byte per pixel — saves 4× memory across the
         // mask cache, and lookup is faster with no stride.

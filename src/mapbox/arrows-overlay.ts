@@ -34,6 +34,7 @@ import {
 import { loadTilePixels } from '../core/tile-pixel-reader';
 import { normalizeRenderArgs, type NormalisedRenderArgs } from './host-adapter';
 import { ARROWS_VS, ARROWS_FS } from './shaders/index.js';
+import { expandTileUrl } from '../core/urls';
 
 // Layer id kept stable across the GeoJSON→custom-layer rewrite so
 // host pages that reference the id via beforeId (the test page does
@@ -154,15 +155,9 @@ async function loadTile(
     // status === 'error' — fall through and retry.
   }
   const promise = (async (): Promise<LoadedTileEntry> => {
-    const url = tileUrlTemplate
-      .replace('{z}', String(z))
-      .replace('{x}', String(x))
-      .replace('{y}', String(y));
+    const url = expandTileUrl(tileUrlTemplate, z, x, y);
     const maskUrl = landmaskUrlTemplate
-      ? landmaskUrlTemplate
-          .replace('{z}', String(z))
-          .replace('{x}', String(x))
-          .replace('{y}', String(y))
+      ? expandTileUrl(landmaskUrlTemplate, z, x, y)
       : null;
     const [dataPx, maskPx] = await Promise.all([
       loadTilePixels(url),

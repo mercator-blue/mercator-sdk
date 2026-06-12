@@ -28,9 +28,9 @@ import {
   tilePixelToLngLat,
 } from '../core/mercator';
 import { loadTilePixels } from '../core/tile-pixel-reader';
-import { resolveColormap } from '../core/colormaps';
+import { resolveColormap, sampleColormapCss } from '../core/colormaps';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
-import { withApiKey, absolutiseUrl, DEFAULT_CATALOG_URL } from '../core/urls';
+import { withApiKey, absolutiseUrl, expandTileUrl, DEFAULT_CATALOG_URL } from '../core/urls';
 import type { ColormapSpec, MercatorArrowsOptions } from '../core/types';
 
 const TARGET_ARROWS_ACROSS = 30;
@@ -98,18 +98,12 @@ async function loadTile(
     // 'error' — fall through and retry.
   }
   const promise = (async (): Promise<LoadedTile> => {
-    const url = tileUrlTemplate
-      .replace('{z}', String(z))
-      .replace('{x}', String(x))
-      .replace('{y}', String(y));
+    const url = expandTileUrl(tileUrlTemplate, z, x, y);
     // Co-fetch the landmask tile at the same z/x/y. A 404 (mask pyramid
     // shallower than the data, or no mask configured) resolves to null
     // and the tile decodes mask-free — same as the Mapbox arrows binding.
     const maskUrl = landmaskUrlTemplate
-      ? landmaskUrlTemplate
-          .replace('{z}', String(z))
-          .replace('{x}', String(x))
-          .replace('{y}', String(y))
+      ? expandTileUrl(landmaskUrlTemplate, z, x, y)
       : null;
     const [dataPx, maskPx] = await Promise.all([
       loadTilePixels(url),
@@ -144,18 +138,6 @@ async function loadTile(
 
 /** Sample a `Float32Array` 16-stop colormap at t ∈ [0,1]. Returns an
  *  `rgb(…)` string ready for Canvas2D `strokeStyle`. */
-function sampleColormap(palette: Float32Array, t: number): string {
-  const stops = palette.length / 3;
-  const c = Math.max(0, Math.min(1, t)) * (stops - 1);
-  const i = Math.floor(c);
-  const j = Math.min(stops - 1, i + 1);
-  const a = c - i;
-  const r = palette[i * 3]     * (1 - a) + palette[j * 3]     * a;
-  const g = palette[i * 3 + 1] * (1 - a) + palette[j * 3 + 1] * a;
-  const b = palette[i * 3 + 2] * (1 - a) + palette[j * 3 + 2] * a;
-  return `rgb(${(r * 255) | 0}, ${(g * 255) | 0}, ${(b * 255) | 0})`;
-}
-
 let LayerClass: any = null;
 
 function ensureLayerClass(): any {
@@ -488,7 +470,7 @@ function ensureLayerClass(): any {
         const wingL = map.latLngToContainerPoint([a.wingLLat, a.wingLLng]);
         const wingR = map.latLngToContainerPoint([a.wingRLat, a.wingRLng]);
 
-        ctx.strokeStyle = sampleColormap(palette, a.speed / speedRef);
+        ctx.strokeStyle = sampleColormapCss(palette, a.speed / speedRef);
         ctx.beginPath();
         ctx.moveTo(tail.x, tail.y);
         ctx.lineTo(tip.x, tip.y);

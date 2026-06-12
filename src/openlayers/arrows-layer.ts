@@ -37,8 +37,8 @@ import type { FrameState } from 'ol/Map.js';
 
 import { loadTilePixels } from '../core/tile-pixel-reader';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
-import { withApiKey, absolutiseUrl, DEFAULT_CATALOG_URL } from '../core/urls';
-import { resolveColormap } from '../core/colormaps';
+import { withApiKey, absolutiseUrl, expandTileUrl, DEFAULT_CATALOG_URL } from '../core/urls';
+import { resolveColormap, sampleColormapCss } from '../core/colormaps';
 import type { ColormapSpec, MercatorArrowsOptions } from '../core/types';
 
 import { HALF_MERCATOR, WORLD_EXT_3857 } from '../core/mercator';
@@ -98,20 +98,6 @@ function snapKey(s: ViewSnapshot): string {
   return `${s.zoom}|${s.center[0]}|${s.center[1]}|${s.size[0]}|${s.size[1]}`;
 }
 
-/** Sample a `Float32Array` (PALETTE_SIZE × RGB) colormap at t ∈ [0,1].
- *  Returns an `rgb(…)` string for Canvas2D `strokeStyle`. */
-function sampleColormap(palette: Float32Array, t: number): string {
-  const stops = palette.length / 3;
-  const c = Math.max(0, Math.min(1, t)) * (stops - 1);
-  const i = Math.floor(c);
-  const j = Math.min(stops - 1, i + 1);
-  const a = c - i;
-  const r = palette[i * 3]     * (1 - a) + palette[j * 3]     * a;
-  const g = palette[i * 3 + 1] * (1 - a) + palette[j * 3 + 1] * a;
-  const b = palette[i * 3 + 2] * (1 - a) + palette[j * 3 + 2] * a;
-  return `rgb(${(r * 255) | 0}, ${(g * 255) | 0}, ${(b * 255) | 0})`;
-}
-
 function buildLayer(opts: MercatorArrowsLayerOpts, item: DiscoveredItem): Layer {
   if (item.encoding.kind !== 'vector_rg_ba') {
     throw new Error(
@@ -162,15 +148,9 @@ function buildLayer(opts: MercatorArrowsLayerOpts, item: DiscoveredItem): Layer 
       // 'error' — fall through and retry below.
     }
     const promise = (async (): Promise<LoadedTile> => {
-      const url = tileUrlTemplate
-        .replace('{z}', String(z))
-        .replace('{x}', String(wrappedTx))
-        .replace('{y}', String(ty));
+      const url = expandTileUrl(tileUrlTemplate, z, wrappedTx, ty);
       const maskUrl = landmaskUrlTemplate
-        ? landmaskUrlTemplate
-            .replace('{z}', String(z))
-            .replace('{x}', String(wrappedTx))
-            .replace('{y}', String(ty))
+        ? expandTileUrl(landmaskUrlTemplate, z, wrappedTx, ty)
         : null;
       const [dataPx, maskPx] = await Promise.all([
         loadTilePixels(url),
@@ -348,7 +328,7 @@ function buildLayer(opts: MercatorArrowsLayerOpts, item: DiscoveredItem): Layer 
       const wingRX = tipX + Math.cos(aR) * headLen;
       const wingRY = tipY + Math.sin(aR) * headLen;
 
-      ctx.strokeStyle = sampleColormap(palette, a.speed / speedRef);
+      ctx.strokeStyle = sampleColormapCss(palette, a.speed / speedRef);
       ctx.beginPath();
       ctx.moveTo(cx, cy);
       ctx.lineTo(tipX, tipY);
