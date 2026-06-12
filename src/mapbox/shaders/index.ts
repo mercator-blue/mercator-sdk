@@ -19,6 +19,8 @@ import {
 } from '../../core/shaders/index';
 import POINTS_VS from './streamlines-points.vert';
 import POINTS_FS from './streamlines-points.frag';
+import SIM_VS from './streamlines-sim.vert';
+import SIM_FS from './streamlines-sim.frag';
 import ARROWS_VS from './arrows.vert';
 import ARROWS_FS from './arrows.frag';
 import TILE_BOUNDS_VS from './tile-bounds.vert';
@@ -34,6 +36,8 @@ export {
   QUAD_VS,
   POINTS_VS,
   POINTS_FS,
+  SIM_VS,
+  SIM_FS,
   FADE_FS,
   COMPOSITE_FS,
   ARROWS_VS,

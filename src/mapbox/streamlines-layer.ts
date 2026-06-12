@@ -34,6 +34,8 @@ import {
 import {
   POINTS_VS,
   POINTS_FS,
+  SIM_VS,
+  SIM_FS,
   QUAD_VS,
   FADE_FS,
   COMPOSITE_FS,
@@ -42,13 +44,25 @@ import {
 function buildPointsProgram(
   gl: WebGL2RenderingContext,
   shaderData: NormalisedRenderArgs['shaderData'],
+  gpuSim: boolean,
 ): WebGLProgram {
   const prelude = shaderData?.vertexShaderPrelude ?? '';
   const define = shaderData?.define ?? '';
-  const vsSource = `#version 300 es\n${prelude}\n${define}\n${POINTS_VS}`;
+  // GPU_SIM swaps the per-instance prev/cur/speed attributes for texelFetch
+  // reads of the ping-pong position textures (see streamlines-points.vert).
+  const gpuDefine = gpuSim ? '#define GPU_SIM' : '';
+  const vsSource = `#version 300 es\n${prelude}\n${define}\n${gpuDefine}\n${POINTS_VS}`;
   const fsSource = `#version 300 es\n${POINTS_FS}`;
   return createProgram(gl, vsSource, fsSource);
 }
+
+// Resolution of the per-view velocity texture the GPU sim samples. Assembled
+// on the CPU from the loaded tiles on each viewport change (not per frame), so
+// this is the cost knob for that rebuild: 512² ≈ a quarter-million sampleWind
+// calls, roughly matching the visible data resolution at the datasets' z5
+// ceiling. Bump toward 1024 if the flow looks blocky; drop if pan-settle
+// hitches.
+const VEL_TEX_SIZE = 512;
 
 export interface StreamlinesLayerOpts {
   /** MapLibre/Mapbox layer id. */
@@ -97,6 +111,15 @@ export interface StreamlinesLayerOpts {
   landmaskMaxZ?: number;
   /** Mapbox GL JS v3 Standard slot. Ignored on Mapbox classic + MapLibre. */
   slot?: string;
+  /** Run the particle simulation on the GPU (texture GPGPU) instead of the
+   *  CPU loop. Default true. Set false to fall back to the CPU sim (kept for
+   *  A/B comparison during bring-up). */
+  gpuSim?: boolean;
+  /** Render the trail buffer at this fraction of device resolution (0.1..1).
+   *  Default 1. The trail fade + composite are full-canvas passes whose cost
+   *  scales with pixel count; 0.5 quarters that at the cost of slightly softer
+   *  trails. Particle motion and on-screen line width are unaffected. */
+  trailResolutionScale?: number;
 }
 
 // --- Tile cache shapes -------------------------------------------------
@@ -202,6 +225,7 @@ interface StreamlinesLayerThis {
   fbB: FB | null;
   fbW: number;
   fbH: number;
+  trailScale: number;
 
   // GPU programs + locations.
   pointsProgram: WebGLProgram | null;
@@ -248,6 +272,50 @@ interface StreamlinesLayerThis {
   quadVbo: WebGLBuffer | null;
   coordOrigin?: [number, number];
 
+  // --- GPU simulation state (gpuSim path) ---------------------------------
+  // Particle positions live in a ping-pong pair of RGBA8 textures (one texel
+  // per particle, viewport-local 16-bit/axis), advanced by a fragment-shader
+  // pass. The velocity field is a separate RGBA8 texture assembled on the CPU
+  // from loaded tiles on each viewport change. Reseeding stays on the CPU
+  // (round-robin), reusing makeParticle.
+  posTexA: WebGLTexture | null;
+  posTexB: WebGLTexture | null;
+  simFboA: WebGLFramebuffer | null;   // renders into posTexA
+  simFboB: WebGLFramebuffer | null;   // renders into posTexB
+  velTex: WebGLTexture | null;
+  texW: number;
+  texH: number;
+  _posFrontIsA: boolean;              // which posTex holds the current (prev) state
+  _gpuReady: boolean;                 // velTex assembled + particles seeded
+  _velDirty: boolean;                 // a tile loaded; re-snapshot velTex when stable
+  _seedOx: number;                    // padded seed bbox (mercator) — matches makeParticle
+  _seedOy: number;
+  _seedSx: number;
+  _seedSy: number;
+  _seedCursor: number;                // round-robin reseed pointer
+  _seedStaging: Uint8Array;           // reusable scratch for reseed row writes
+
+  simProgram: WebGLProgram | null;
+  simAttrPos: GLint;
+  simUPosIn: WebGLUniformLocation | null;
+  simUVelTex: WebGLUniformLocation | null;
+  simUVelSize: WebGLUniformLocation | null;
+  simUSeedSpan: WebGLUniformLocation | null;
+  simUDecScale: WebGLUniformLocation | null;
+  simUDecOffset: WebGLUniformLocation | null;
+  simUEff: WebGLUniformLocation | null;
+  simUMinStep: WebGLUniformLocation | null;
+
+  // GPU_SIM points-program uniform locations (null when gpuSim is off).
+  pointsUPosPrev: WebGLUniformLocation | null;
+  pointsUPosCur: WebGLUniformLocation | null;
+  pointsUVelTexSpeed: WebGLUniformLocation | null;
+  pointsUTexW: WebGLUniformLocation | null;
+  pointsUSeedOrigin: WebGLUniformLocation | null;
+  pointsUSeedSpan: WebGLUniformLocation | null;
+  pointsUDecScale: WebGLUniformLocation | null;
+  pointsUDecOffset: WebGLUniformLocation | null;
+
   // Camera-state tracking (replaces 'move' / 'zoomend' events).
   _prevCameraKey: string | null;
   _cameraMoving: boolean;
@@ -286,10 +354,21 @@ interface StreamlinesLayerThis {
   deleteFramebuffers(): void;
   clearTrailBuffers(): void;
 
+  // GPU-sim methods.
+  setupGpuTextures(): void;
+  deleteGpuTextures(): void;
+  _computeSeedBbox(): void;
+  _encodeSeedInto(buf: Uint8Array, off: number): void;
+  assembleVelTex(): void;
+  fullReseedGpu(): void;
+  reseedRoundRobinGpu(): void;
+  simStepGpu(gl: WebGL2RenderingContext): void;
+
   // Runtime setters (declared so this-typed methods can dispatch via
   // `this.setX(...)` from applyOptions).
   setOpacity(o: number): void;
   setPointSize(s: number): void;
+  setTrailResolutionScale(s: number): void;
   setSpeedScale(s: number): void;
   setMaxAge(a: number): void;
   setFade(f: number): void;
@@ -320,6 +399,7 @@ const MIN_STEP_PIXELS = 0.5;
 export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
   const MAX_Z = opts.maxzoom ?? 5;
   const LANDMASK_MAX_Z = opts.landmaskMaxZ ?? MAX_Z;
+  const GPU_SIM = opts.gpuSim ?? true;
   const landmaskAccepts: Set<number> | null = opts.landmaskAccepts
     ? new Set(opts.landmaskAccepts)
     : null;
@@ -355,6 +435,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       this.fbB = null;
       this.fbW = 0;
       this.fbH = 0;
+      this.trailScale = opts.trailResolutionScale ?? 1;
 
       // Points program is compiled lazily in render() — we need MapLibre's
       // shaderData (for the projection prelude) which is only on the args.
@@ -404,6 +485,37 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       this._cameraMoving = false;
       this._isGlobe = false;
 
+      // GPU-sim resources. Position ping-pong textures + per-view velocity
+      // texture are created here; assembly + first seed happen in the
+      // bootstrap promise below (they need a loaded tile + a viewport).
+      this.posTexA = null;
+      this.posTexB = null;
+      this.simFboA = null;
+      this.simFboB = null;
+      this.velTex = null;
+      this.texW = 0;
+      this.texH = 0;
+      this._posFrontIsA = true;
+      this._gpuReady = false;
+      this._velDirty = false;
+      this._seedOx = 0; this._seedOy = 0; this._seedSx = 1; this._seedSy = 1;
+      this._seedCursor = 0;
+      this._seedStaging = new Uint8Array(0);
+      this.simProgram = null;
+      if (GPU_SIM) {
+        this.simProgram = createProgram(gl, SIM_VS, SIM_FS);
+        this.simAttrPos = gl.getAttribLocation(this.simProgram, 'a_pos');
+        this.simUPosIn = gl.getUniformLocation(this.simProgram, 'u_posIn');
+        this.simUVelTex = gl.getUniformLocation(this.simProgram, 'u_velTex');
+        this.simUVelSize = gl.getUniformLocation(this.simProgram, 'u_velSize');
+        this.simUSeedSpan = gl.getUniformLocation(this.simProgram, 'u_seedSpan');
+        this.simUDecScale = gl.getUniformLocation(this.simProgram, 'u_decScale');
+        this.simUDecOffset = gl.getUniformLocation(this.simProgram, 'u_decOffset');
+        this.simUEff = gl.getUniformLocation(this.simProgram, 'u_eff');
+        this.simUMinStep = gl.getUniformLocation(this.simProgram, 'u_minStepMerc');
+        this.setupGpuTextures();
+      }
+
       // Seed the simulation with a fallback z=0 tile so particles can sample
       // wind from frame one, before higher-zoom tiles have finished loading.
       // Also kick off a z=0 mask tile in parallel — without it, particles
@@ -414,7 +526,14 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       ])
         .then(() => {
           this.computeViewport();
-          this.initParticles();
+          if (GPU_SIM) {
+            this._computeSeedBbox();
+            this.assembleVelTex();
+            this.fullReseedGpu();
+            this._gpuReady = true;
+          } else {
+            this.initParticles();
+          }
           this.map.triggerRepaint();
         })
         .catch((err: unknown) => console.error('streamlines: failed to load fallback tile', err));
@@ -427,9 +546,11 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       if (this.pointsProgram) gl.deleteProgram(this.pointsProgram);
       gl.deleteProgram(this.fadeProgram);
       gl.deleteProgram(this.compositeProgram);
+      if (this.simProgram) gl.deleteProgram(this.simProgram);
       if (this.colormapTexture) gl.deleteTexture(this.colormapTexture);
       this.colormapTexture = null;
       this.deleteFramebuffers();
+      this.deleteGpuTextures();
     },
 
     deleteFramebuffers(this: StreamlinesLayerThis): void {
@@ -460,6 +581,222 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, savedFbo);
     },
 
+    /* ---- GPU simulation (gpuSim path) ---- */
+
+    /** Create (or recreate) the position ping-pong textures, their sim FBOs,
+     *  and the velocity texture. Sized from N (one texel per particle). */
+    setupGpuTextures(this: StreamlinesLayerThis): void {
+      const gl = this.gl;
+      this.deleteGpuTextures();
+      const texW = Math.max(1, Math.ceil(Math.sqrt(this.N)));
+      const texH = Math.max(1, Math.ceil(this.N / texW));
+      this.texW = texW;
+      this.texH = texH;
+      const mkTex = (w: number, h: number): WebGLTexture => {
+        const t = gl.createTexture();
+        if (!t) throw new Error('@mercator-blue/sdk/mapbox: streamlines — gl.createTexture returned null');
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        // null data is zero-filled per the WebGL spec → all-zero = dead sentinel.
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        return t;
+      };
+      this.posTexA = mkTex(texW, texH);
+      this.posTexB = mkTex(texW, texH);
+      this.velTex = mkTex(VEL_TEX_SIZE, VEL_TEX_SIZE);
+      const mkFbo = (tex: WebGLTexture): WebGLFramebuffer => {
+        const fb = gl.createFramebuffer();
+        if (!fb) throw new Error('@mercator-blue/sdk/mapbox: streamlines — gl.createFramebuffer returned null');
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        return fb;
+      };
+      this.simFboA = mkFbo(this.posTexA);
+      this.simFboB = mkFbo(this.posTexB);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      this._posFrontIsA = true;
+      this._seedCursor = 0;
+      this._seedStaging = new Uint8Array(texW * texH * 4);
+    },
+
+    deleteGpuTextures(this: StreamlinesLayerThis): void {
+      const gl = this.gl;
+      if (this.posTexA) { gl.deleteTexture(this.posTexA); this.posTexA = null; }
+      if (this.posTexB) { gl.deleteTexture(this.posTexB); this.posTexB = null; }
+      if (this.velTex) { gl.deleteTexture(this.velTex); this.velTex = null; }
+      if (this.simFboA) { gl.deleteFramebuffer(this.simFboA); this.simFboA = null; }
+      if (this.simFboB) { gl.deleteFramebuffer(this.simFboB); this.simFboB = null; }
+    },
+
+    /** Padded seed bbox (mercator), identical to makeParticle's seed range, so
+     *  the velocity texture, the position encoding, and CPU-placed seeds all
+     *  share one coordinate frame. Also sets coordOrigin (bbox centre) for the
+     *  render VS split-precision projection. Cheap; recomputed each frame. */
+    _computeSeedBbox(this: StreamlinesLayerThis): void {
+      const v = this.viewport;
+      if (!v) return;
+      const sx = v.mxMax - v.mxMin;
+      const sy = v.myMax - v.myMin;
+      this._seedOx = v.mxMin - SEED_MARGIN * sx;
+      this._seedOy = v.myMin - SEED_MARGIN * sy;
+      this._seedSx = sx * (1 + 2 * SEED_MARGIN);
+      this._seedSy = sy * (1 + 2 * SEED_MARGIN);
+      this.coordOrigin = [this._seedOx + this._seedSx / 2, this._seedOy + this._seedSy / 2];
+    },
+
+    /** Draw one CPU seed (via makeParticle) and write its 4 encoded bytes
+     *  (viewport-local 16-bit/axis) at `off`. A dead seed (no ocean found) is
+     *  the all-zero sentinel; the render VS culls it. */
+    _encodeSeedInto(this: StreamlinesLayerThis, buf: Uint8Array, off: number): void {
+      const p = this.makeParticle();
+      if (p.speed < 0 || this._seedSx <= 0 || this._seedSy <= 0) {
+        buf[off] = 0; buf[off + 1] = 0; buf[off + 2] = 0; buf[off + 3] = 0;
+        return;
+      }
+      const lx = (p.mx - this._seedOx) / this._seedSx;
+      const ly = (p.my - this._seedOy) / this._seedSy;
+      let qx = Math.max(0, Math.min(65535, Math.round(lx * 65535)));
+      const qy = Math.max(0, Math.min(65535, Math.round(ly * 65535)));
+      // Avoid colliding with the all-zero dead sentinel for a live particle.
+      if (qx === 0 && qy === 0) qx = 1;
+      buf[off] = qx >> 8; buf[off + 1] = qx & 255;
+      buf[off + 2] = qy >> 8; buf[off + 3] = qy & 255;
+    },
+
+    /** Assemble the per-view velocity texture (vector_rg_ba, NEAREST) from the
+     *  loaded tiles over the padded seed bbox. Land / no-data texels are the
+     *  all-zero sentinel (landmask is folded in via sampleWind). Rebuilt only
+     *  on viewport change / tile-in, not per frame. */
+    assembleVelTex(this: StreamlinesLayerThis): void {
+      const gl = this.gl;
+      if (!this.velTex) return;
+      const S = VEL_TEX_SIZE;
+      const buf = new Uint8Array(S * S * 4); // zero-filled = no-data sentinel
+      const sc = opts.encoding.scale;
+      const off = opts.encoding.offset;
+      const ox = this._seedOx, oy = this._seedOy, sx = this._seedSx, sy = this._seedSy;
+      for (let j = 0; j < S; j++) {
+        const my = oy + ((j + 0.5) / S) * sy;
+        for (let i = 0; i < S; i++) {
+          const mx = ox + ((i + 0.5) / S) * sx;
+          const w = this.sampleWind(mx, my); // null over land / no-data
+          if (!w) continue;
+          const uq = Math.max(0, Math.min(65535, Math.round((w.u - off) / sc)));
+          const vq = Math.max(0, Math.min(65535, Math.round((w.v - off) / sc)));
+          let R = uq >> 8; let G = uq & 255;
+          const B = vq >> 8; const A = vq & 255;
+          if ((R | G | B | A) === 0) G = 1; // don't alias the sentinel
+          const idx = (j * S + i) * 4;
+          buf[idx] = R; buf[idx + 1] = G; buf[idx + 2] = B; buf[idx + 3] = A;
+        }
+      }
+      gl.bindTexture(gl.TEXTURE_2D, this.velTex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, S, S, 0, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    },
+
+    /** Seed all N particles into the current FRONT position texture (used on
+     *  bootstrap and on camera settle). The sim fills BACK from FRONT next. */
+    fullReseedGpu(this: StreamlinesLayerThis): void {
+      const gl = this.gl;
+      const front = this._posFrontIsA ? this.posTexA : this.posTexB;
+      if (!front) return;
+      const buf = this._seedStaging;
+      buf.fill(0);
+      for (let i = 0; i < this.N; i++) this._encodeSeedInto(buf, i * 4);
+      gl.bindTexture(gl.TEXTURE_2D, front);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.texW, this.texH, 0, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+      this._seedCursor = 0;
+    },
+
+    /** Refresh ~N/maxAge particles per frame on a round-robin schedule (the
+     *  steady-state recycle rate). Writes only the affected texels of FRONT
+     *  via texSubImage2D; the GPU owns every other texel. */
+    reseedRoundRobinGpu(this: StreamlinesLayerThis): void {
+      const gl = this.gl;
+      const front = this._posFrontIsA ? this.posTexA : this.posTexB;
+      if (!front) return;
+      let count = Math.ceil(this.N / Math.max(1, this.maxAge));
+      if (count <= 0) return;
+      gl.bindTexture(gl.TEXTURE_2D, front);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      let idx = this._seedCursor;
+      while (count > 0) {
+        const row = Math.floor(idx / this.texW);
+        const col = idx % this.texW;
+        const n = Math.min(count, this.texW - col, this.N - idx);
+        const seg = new Uint8Array(n * 4);
+        for (let k = 0; k < n; k++) this._encodeSeedInto(seg, k * 4);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, col, row, n, 1, gl.RGBA, gl.UNSIGNED_BYTE, seg);
+        count -= n;
+        idx += n;
+        if (idx >= this.N) idx = 0; // wrap
+      }
+      this._seedCursor = idx;
+    },
+
+    /** Advance every particle one step: fragment-shader pass reading FRONT,
+     *  writing BACK. Restores the caller's framebuffer + viewport. */
+    simStepGpu(this: StreamlinesLayerThis, gl: WebGL2RenderingContext): void {
+      if (!this.simProgram || !this.velTex) return;
+      const front = this._posFrontIsA ? this.posTexA : this.posTexB;
+      const backFbo = this._posFrontIsA ? this.simFboB : this.simFboA;
+      if (!front || !backFbo) return;
+
+      const savedFbo = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+      const savedViewport = gl.getParameter(gl.VIEWPORT);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, backFbo);
+      gl.viewport(0, 0, this.texW, this.texH);
+      gl.disable(gl.BLEND);
+      gl.useProgram(this.simProgram);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.quadVbo);
+      gl.enableVertexAttribArray(this.simAttrPos);
+      gl.vertexAttribPointer(this.simAttrPos, 2, gl.FLOAT, false, 0, 0);
+
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, front);
+      if (this.simUPosIn) gl.uniform1i(this.simUPosIn, 0);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.velTex);
+      if (this.simUVelTex) gl.uniform1i(this.simUVelTex, 1);
+      if (this.simUVelSize) gl.uniform2i(this.simUVelSize, VEL_TEX_SIZE, VEL_TEX_SIZE);
+      if (this.simUSeedSpan) gl.uniform2f(this.simUSeedSpan, this._seedSx, this._seedSy);
+      if (this.simUDecScale) gl.uniform1f(this.simUDecScale, opts.encoding.scale);
+      if (this.simUDecOffset) gl.uniform1f(this.simUDecOffset, opts.encoding.offset);
+
+      // eff + min-step floor: identical math to updateParticles, measured from
+      // the live projection at the screen centre.
+      const zoom = this.map.getZoom();
+      const eff = this._isGlobe
+        ? this.speedScale * Math.min(0.25, Math.pow(0.5, zoom))
+        : this.speedScale * Math.pow(0.5, zoom);
+      if (this.simUEff) gl.uniform1f(this.simUEff, eff);
+      const canvas = this.map.getCanvas();
+      const dpr = canvas.width / Math.max(1, canvas.clientWidth || canvas.width);
+      const ctr = this.map.getCenter();
+      const EPS_LNG = 0.1;
+      const pa = this.map.project([ctr.lng - EPS_LNG, ctr.lat]);
+      const pb = this.map.project([ctr.lng + EPS_LNG, ctr.lat]);
+      const screenDevPx = Math.hypot(pb.x - pa.x, pb.y - pa.y) * dpr;
+      const mercDelta = (2 * EPS_LNG) / 360;
+      const v = this.viewport;
+      const pxPerMercator = (screenDevPx > 1e-6 && mercDelta > 1e-12)
+        ? screenDevPx / mercDelta
+        : canvas.width / Math.max(v ? v.mxMax - v.mxMin : 1, 1e-9);
+      if (this.simUMinStep) gl.uniform1f(this.simUMinStep, MIN_STEP_PIXELS / pxPerMercator);
+
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.disableVertexAttribArray(this.simAttrPos);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, savedFbo);
+      gl.viewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
+    },
+
     /* ---- runtime configuration setters (the SDK surface) ---- */
 
     setOpacity(this: StreamlinesLayerThis, o: number): void {
@@ -468,6 +805,12 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
     },
     setPointSize(this: StreamlinesLayerThis, s: number): void {
       this.pointSize = s;
+      this.map.triggerRepaint();
+    },
+    setTrailResolutionScale(this: StreamlinesLayerThis, s: number): void {
+      this.trailScale = Math.max(0.1, Math.min(1, s));
+      this.setupFramebuffers(); // rebuilds at the new size (size differs)
+      this.clearTrailBuffers();
       this.map.triggerRepaint();
     },
     setSpeedScale(this: StreamlinesLayerThis, s: number): void {
@@ -505,7 +848,18 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       const gl = this.gl;
       gl.bindBuffer(gl.ARRAY_BUFFER, this.pointsVbo);
       gl.bufferData(gl.ARRAY_BUFFER, this.vertData.byteLength, gl.DYNAMIC_DRAW);
-      if (this.viewport) this.initParticles();
+      if (GPU_SIM) {
+        // Resize the position textures (one texel/particle). setupGpuTextures
+        // also recreates velTex empty, so re-snapshot it before reseeding.
+        this.setupGpuTextures();
+        if (this.viewport && this._gpuReady) {
+          this._computeSeedBbox();
+          this.assembleVelTex();
+          this.fullReseedGpu();
+        }
+      } else if (this.viewport) {
+        this.initParticles();
+      }
       this.map.triggerRepaint();
     },
     setVmin(this: StreamlinesLayerThis, v: number): void {
@@ -523,6 +877,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
     applyOptions(this: StreamlinesLayerThis, p: any): void {
       if (p.opacity != null) this.setOpacity(p.opacity);
       if (p.pointSize != null) this.setPointSize(p.pointSize);
+      if (p.trailResolutionScale != null) this.setTrailResolutionScale(p.trailResolutionScale);
       if (p.speedScale != null) this.setSpeedScale(p.speedScale);
       if (p.maxAge != null) this.setMaxAge(p.maxAge);
       if (p.fade != null) this.setFade(p.fade);
@@ -535,7 +890,12 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
 
     setupFramebuffers(this: StreamlinesLayerThis): void {
       const gl = this.gl;
-      const W = gl.canvas.width, H = gl.canvas.height;
+      // Trail buffer can run below device resolution: the fade + composite are
+      // full-canvas passes whose GPU cost scales with pixel count, so a 0.5
+      // scale quarters them. Composite upscales with LINEAR on the way to the
+      // screen, so the only cost is slightly softer trails.
+      const W = Math.max(1, Math.round(gl.canvas.width * this.trailScale));
+      const H = Math.max(1, Math.round(gl.canvas.height * this.trailScale));
       if (this.fbA && this.fbW === W && this.fbH === H) return;
       this.deleteFramebuffers();
       this.fbA = this.makeFramebuffer(W, H);
@@ -816,13 +1176,13 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
           if (mask) {
             if (!this.maskTiles.has(key)) {
               this.loadMaskTile(z, tx, yi)
-                .then(() => this.map.triggerRepaint())
+                .then(() => { this._velDirty = true; this.map.triggerRepaint(); })
                 .catch(() => {});
             }
           } else {
             if (!this.tiles.has(key)) {
               this.loadTile(z, tx, yi)
-                .then(() => this.map.triggerRepaint())
+                .then(() => { this._velDirty = true; this.map.triggerRepaint(); })
                 .catch(() => {});
             }
           }
@@ -1286,13 +1646,23 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       const variant = normalised.shaderData.variantName;
       if (this.pointsProgram && this.pointsProgramVariant === variant) return;
       if (this.pointsProgram) gl.deleteProgram(this.pointsProgram);
-      this.pointsProgram = buildPointsProgram(gl, normalised.shaderData);
+      this.pointsProgram = buildPointsProgram(gl, normalised.shaderData, GPU_SIM);
       this.pointsProgramVariant = variant;
       const p = this.pointsProgram;
+      // a_prev/a_cur/a_speed exist only in the CPU-sim variant; -1 in GPU mode.
       this.pointsAttrPrev = gl.getAttribLocation(p, 'a_prev');
       this.pointsAttrCur = gl.getAttribLocation(p, 'a_cur');
       this.pointsAttrSpeed = gl.getAttribLocation(p, 'a_speed');
       this.pointsAttrCorner = gl.getAttribLocation(p, 'a_corner');
+      // GPU_SIM position-texture samplers + decode uniforms (null when off).
+      this.pointsUPosPrev = gl.getUniformLocation(p, 'u_posPrev');
+      this.pointsUPosCur = gl.getUniformLocation(p, 'u_posCur');
+      this.pointsUVelTexSpeed = gl.getUniformLocation(p, 'u_velTex');
+      this.pointsUTexW = gl.getUniformLocation(p, 'u_texW');
+      this.pointsUSeedOrigin = gl.getUniformLocation(p, 'u_seedOrigin');
+      this.pointsUSeedSpan = gl.getUniformLocation(p, 'u_seedSpan');
+      this.pointsUDecScale = gl.getUniformLocation(p, 'u_decScale');
+      this.pointsUDecOffset = gl.getUniformLocation(p, 'u_decOffset');
       this.pointsUOrigin = gl.getUniformLocation(p, 'u_origin');
       this.pointsUOriginClip = gl.getUniformLocation(p, 'u_origin_clip');
       this.pointsUOpacity = gl.getUniformLocation(p, 'u_opacity');
@@ -1395,7 +1765,8 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
         this.computeViewport();
         this.ensureVisibleTilesLoading();
       }
-      if (this.particles.length === 0) {
+      const ready = GPU_SIM ? this._gpuReady : this.particles.length > 0;
+      if (!ready) {
         this.map.triggerRepaint();
         return;
       }
@@ -1403,20 +1774,39 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
 
       // While the camera is changing, wipe trails each frame so stale
       // screen-space pixels don't smear. The first frame after motion stops
-      // is the cue to reseed particles into the new viewport — at this point
-      // the camera has visually settled, well before MapLibre's zoomend.
+      // is the cue to reseed into the new viewport — the camera has visually
+      // settled by now, well before MapLibre's zoomend. The GPU path also
+      // rebuilds its per-view velocity texture there (skipped mid-move).
       if (this._prevCameraKey !== null && cameraChanged) {
         this.clearTrailBuffers();
         this._cameraMoving = true;
       } else if (this._cameraMoving) {
-        this.initParticles();
+        if (GPU_SIM) {
+          this._computeSeedBbox();
+          this.assembleVelTex();
+          this.fullReseedGpu();
+        } else {
+          this.initParticles();
+        }
         this.clearTrailBuffers();
         this._cameraMoving = false;
       }
       this._prevCameraKey = cameraKey;
 
-      this.updateParticles();
-      this.rebuildVertices();
+      if (GPU_SIM) {
+        this._computeSeedBbox();
+        // A tile finished loading while parked → re-snapshot the velocity
+        // texture (skipped mid-move; the settle branch covers that case).
+        if (this._velDirty && !this._cameraMoving) {
+          this.assembleVelTex();
+          this._velDirty = false;
+        }
+        this.reseedRoundRobinGpu();
+        this.simStepGpu(gl);
+      } else {
+        this.updateParticles();
+        this.rebuildVertices();
+      }
 
       if (!this.fbA || !this.fbB || !this.pointsProgram) return;
 
@@ -1446,19 +1836,42 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       // prev→cur into a screen-space quad in the vertex shader.
       gl.useProgram(this.pointsProgram);
 
-      // Per-instance attributes (divisor 1): prev (vec2), cur (vec2), speed.
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.pointsVbo);
-      gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.vertData);
-      const stride = 5 * 4;
-      gl.enableVertexAttribArray(this.pointsAttrPrev);
-      gl.vertexAttribPointer(this.pointsAttrPrev, 2, gl.FLOAT, false, stride, 0);
-      gl.vertexAttribDivisor(this.pointsAttrPrev, 1);
-      gl.enableVertexAttribArray(this.pointsAttrCur);
-      gl.vertexAttribPointer(this.pointsAttrCur, 2, gl.FLOAT, false, stride, 2 * 4);
-      gl.vertexAttribDivisor(this.pointsAttrCur, 1);
-      gl.enableVertexAttribArray(this.pointsAttrSpeed);
-      gl.vertexAttribPointer(this.pointsAttrSpeed, 1, gl.FLOAT, false, stride, 4 * 4);
-      gl.vertexAttribDivisor(this.pointsAttrSpeed, 1);
+      if (GPU_SIM) {
+        // Positions come from the ping-pong textures (prev = FRONT, cur =
+        // BACK after the sim) plus the velocity texture for color-by-speed.
+        // Units 0/1 are used by the fade/composite + colormap; bind ours on
+        // 2/3/4. No per-instance attributes.
+        const front = this._posFrontIsA ? this.posTexA : this.posTexB;
+        const back = this._posFrontIsA ? this.posTexB : this.posTexA;
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, front);
+        if (this.pointsUPosPrev) gl.uniform1i(this.pointsUPosPrev, 2);
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_2D, back);
+        if (this.pointsUPosCur) gl.uniform1i(this.pointsUPosCur, 3);
+        gl.activeTexture(gl.TEXTURE4);
+        gl.bindTexture(gl.TEXTURE_2D, this.velTex);
+        if (this.pointsUVelTexSpeed) gl.uniform1i(this.pointsUVelTexSpeed, 4);
+        if (this.pointsUTexW) gl.uniform1i(this.pointsUTexW, this.texW);
+        if (this.pointsUSeedOrigin) gl.uniform2f(this.pointsUSeedOrigin, this._seedOx, this._seedOy);
+        if (this.pointsUSeedSpan) gl.uniform2f(this.pointsUSeedSpan, this._seedSx, this._seedSy);
+        if (this.pointsUDecScale) gl.uniform1f(this.pointsUDecScale, opts.encoding.scale);
+        if (this.pointsUDecOffset) gl.uniform1f(this.pointsUDecOffset, opts.encoding.offset);
+      } else {
+        // Per-instance attributes (divisor 1): prev (vec2), cur (vec2), speed.
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.pointsVbo);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.vertData);
+        const stride = 5 * 4;
+        gl.enableVertexAttribArray(this.pointsAttrPrev);
+        gl.vertexAttribPointer(this.pointsAttrPrev, 2, gl.FLOAT, false, stride, 0);
+        gl.vertexAttribDivisor(this.pointsAttrPrev, 1);
+        gl.enableVertexAttribArray(this.pointsAttrCur);
+        gl.vertexAttribPointer(this.pointsAttrCur, 2, gl.FLOAT, false, stride, 2 * 4);
+        gl.vertexAttribDivisor(this.pointsAttrCur, 1);
+        gl.enableVertexAttribArray(this.pointsAttrSpeed);
+        gl.vertexAttribPointer(this.pointsAttrSpeed, 1, gl.FLOAT, false, stride, 4 * 4);
+        gl.vertexAttribDivisor(this.pointsAttrSpeed, 1);
+      }
 
       // Per-vertex corner (end, side) — divisor 0 (advances per vertex).
       gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerVbo);
@@ -1493,7 +1906,9 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       }
       if (this.pointsUOpacity) gl.uniform1f(this.pointsUOpacity, 1.0);
       if (this.pointsUViewport) gl.uniform2f(this.pointsUViewport, this.fbW, this.fbH);
-      if (this.pointsULineWidth) gl.uniform1f(this.pointsULineWidth, this.pointSize);
+      // Line width is in trail-FBO pixels (u_viewport is the FBO size), so
+      // scale it with the trail resolution to keep the on-screen width fixed.
+      if (this.pointsULineWidth) gl.uniform1f(this.pointsULineWidth, this.pointSize * this.trailScale);
       if (this.pointsUVmin) gl.uniform1f(this.pointsUVmin, this.vmin);
       if (this.pointsUVmax) gl.uniform1f(this.pointsUVmax, this.vmax);
       if (this.pointsUColorBySpeed) gl.uniform1f(this.pointsUColorBySpeed, this.colorBySpeed ? 1.0 : 0.0);
@@ -1510,12 +1925,14 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE);
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, this.N);
-      // Reset per-instance divisors right away: they live on the shared
-      // default VAO, so a leaked divisor=1 would corrupt the composite pass
-      // below (and the next layer), which draw with plain divisor-0 arrays.
-      gl.vertexAttribDivisor(this.pointsAttrPrev, 0);
-      gl.vertexAttribDivisor(this.pointsAttrCur, 0);
-      gl.vertexAttribDivisor(this.pointsAttrSpeed, 0);
+      if (!GPU_SIM) {
+        // Reset per-instance divisors right away: they live on the shared
+        // default VAO, so a leaked divisor=1 would corrupt the composite pass
+        // below (and the next layer), which draw with plain divisor-0 arrays.
+        gl.vertexAttribDivisor(this.pointsAttrPrev, 0);
+        gl.vertexAttribDivisor(this.pointsAttrCur, 0);
+        gl.vertexAttribDivisor(this.pointsAttrSpeed, 0);
+      }
 
       // 2. Composite fbA to screen with premultiplied alpha blend.
       gl.bindFramebuffer(gl.FRAMEBUFFER, savedFbo);
@@ -1539,9 +1956,11 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       // a still-enabled array pointing at a deleted buffer makes the next
       // layer's drawArrays throw INVALID_OPERATION.
       gl.disableVertexAttribArray(this.fadeAttrPos);
-      gl.disableVertexAttribArray(this.pointsAttrPrev);
-      gl.disableVertexAttribArray(this.pointsAttrCur);
-      gl.disableVertexAttribArray(this.pointsAttrSpeed);
+      if (!GPU_SIM) {
+        gl.disableVertexAttribArray(this.pointsAttrPrev);
+        gl.disableVertexAttribArray(this.pointsAttrCur);
+        gl.disableVertexAttribArray(this.pointsAttrSpeed);
+      }
       gl.disableVertexAttribArray(this.pointsAttrCorner);
       gl.disableVertexAttribArray(this.compositeAttrPos);
 
@@ -1549,6 +1968,9 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       const tmp = this.fbA;
       this.fbA = this.fbB;
       this.fbB = tmp;
+      // Swap the position ping-pong: this frame's BACK (just-advected) becomes
+      // next frame's FRONT (prev).
+      if (GPU_SIM) this._posFrontIsA = !this._posFrontIsA;
 
       this.map.triggerRepaint();
     },

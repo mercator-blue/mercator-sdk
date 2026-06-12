@@ -58,7 +58,7 @@ const GROUPS = {
       </div>
       <div class="row sub">
         <label>Count <span class="val" id="count-val">${count}</span>
-          <input id="count" type="range" min="100" max="20000" step="100" value="${count}" />
+          <input id="count" type="range" min="100" max="300000" step="1000" value="${count}" />
         </label>
       </div>
       <div class="row sub">
