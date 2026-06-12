@@ -1,18 +1,19 @@
 /**
- * Generic WebGL2 shader-compile + program-link helpers. Host-agnostic —
- * used by every binding (Mapbox/MapLibre, Leaflet, OpenLayers, deck.gl
- * custom raw-GL paths). Mapbox/MapLibre custom layers compose this with
+ * Generic WebGL2 shader-compile + program-link helpers. Used by every 
+ * binding (Mapbox/MapLibre, Leaflet, OpenLayers, deck.gl custom raw-GL paths). 
+ * Mapbox/MapLibre custom layers compose this with
  * a projection-prelude prepender (`mapbox/*-layer.ts`'s local
  * `buildProgram`), so this layer doesn't know about preludes.
  */
 
-export function compileShader(
-  gl: WebGL2RenderingContext,
-  /** Shader type (gl.VERTEX_SHADER or gl.FRAGMENT_SHADER) */
-  type: GLenum,
-  /** Shader source */
-  src: string,
-): WebGLShader {
+/**
+ * @param gl WebGL2 rendering context to compile the shader in.
+ * @param type Shader type (gl.VERTEX_SHADER or gl.FRAGMENT_SHADER)
+ * @param src Shader source
+ * @returns Compiled WebGLShader object.
+ * @error Throws an error if shader compilation fails, with the shader info log included in the message.
+ */
+export function compileShader(gl: WebGL2RenderingContext, type: GLenum, src: string): WebGLShader {
   const s = gl.createShader(type);
   if (!s) throw new Error('@mercator-blue/sdk: gl.createShader returned null');
   gl.shaderSource(s, src);
@@ -26,13 +27,15 @@ export function compileShader(
   return s;
 }
 
-export function createProgram(
-  gl: WebGL2RenderingContext,
-  /** vertex shader */
-  vs: string,
-  /** fragment shader */
-  fs: string,
-): WebGLProgram {
+/**
+ * Creates a WebGL program by compiling and linking vertex and fragment shaders.
+ * @param gl WebGL2 rendering context.
+ * @param vs Vertex shader source.
+ * @param fs Fragment shader source.
+ * @error Throws an error if shader compilation or program linking fails, with the info log included in the message.
+ * @returns Compiled WebGLProgram object.
+ */
+export function createProgram(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
   const p = gl.createProgram();
   if (!p) throw new Error('@mercator-blue/sdk: gl.createProgram returned null');
   const vsh = compileShader(gl, gl.VERTEX_SHADER, vs);
@@ -45,8 +48,6 @@ export function createProgram(
     gl.deleteProgram(p);
     throw new Error('@mercator-blue/sdk: WebGL program link error: ' + log);
   }
-  // Attached shaders are flagged for deletion when the program is
-  // deleted, but freeing the source strings early is cheap and harmless.
   gl.deleteShader(vsh);
   gl.deleteShader(fsh);
   return p;
