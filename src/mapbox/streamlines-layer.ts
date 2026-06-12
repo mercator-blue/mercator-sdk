@@ -154,6 +154,17 @@ interface FB {
 // The user-facing particleCount control still works to compensate.
 const SEED_MARGIN = 0.2;
 
+// Pack (z, x, y) into one integer so the per-particle tile lookups can key a
+// Map<number> instead of allocating a `${z}/${x}/${y}` string per sample per
+// frame (8000 particles × up to two caches × the z walk-down = a lot of
+// short-lived strings + hashing). 2^14 per axis supports x,y < 16384 (z ≤ 13),
+// and z·2^28 stays well inside Number.MAX_SAFE_INTEGER. Plain arithmetic, not
+// bit-shifts, to avoid JS's 32-bit bitwise truncation.
+const TILE_AXIS = 16384;
+function tileKey(z: number, x: number, y: number): number {
+  return (z * TILE_AXIS + y) * TILE_AXIS + x;
+}
+
 /**
  * State the streamlines custom WebGL layer attaches to `this` between
  * onAdd and onRemove. Methods are annotated with `this:` so TS knows
@@ -179,8 +190,8 @@ interface StreamlinesLayerThis {
   vmax: number;
 
   // Tile caches + simulation state.
-  tiles: Map<string, DataTile>;
-  maskTiles: Map<string, MaskTile>;
+  tiles: Map<number, DataTile>;
+  maskTiles: Map<number, MaskTile>;
   particles: Particle[];
   viewport: Viewport | null;
   targetZ: number;
@@ -246,6 +257,9 @@ interface StreamlinesLayerThis {
   _lastClippingPlane: VecLike | undefined;
   _lastProjectionTransition: number | undefined;
   _globeBboxMode?: boolean;
+  // Globe-vs-mercator, cached once per frame instead of calling
+  // map.getProjection() per particle in makeParticle / updateParticles.
+  _isGlobe: boolean;
 
   // Methods.
   loadTile(z: number, x: number, y: number): Promise<void>;
@@ -388,6 +402,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       // post-zoom trail buffer before the event-driven reseed fires.
       this._prevCameraKey = null;
       this._cameraMoving = false;
+      this._isGlobe = false;
 
       // Seed the simulation with a fallback z=0 tile so particles can sample
       // wind from frame one, before higher-zoom tiles have finished loading.
@@ -551,7 +566,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
     },
 
     async loadTile(this: StreamlinesLayerThis, z: number, x: number, y: number): Promise<void> {
-      const key = `${z}/${x}/${y}`;
+      const key = tileKey(z, x, y);
       if (this.tiles.has(key)) return;
       this.tiles.set(key, { status: 'loading' });
       try {
@@ -596,7 +611,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
      *  the category byte ends up in the R channel.  */
     async loadMaskTile(this: StreamlinesLayerThis, z: number, x: number, y: number): Promise<void> {
       if (!opts.landmaskUrlTemplate || !landmaskAccepts) return;
-      const key = `${z}/${x}/${y}`;
+      const key = tileKey(z, x, y);
       if (this.maskTiles.has(key)) return;
       this.maskTiles.set(key, { status: 'loading' });
       try {
@@ -628,7 +643,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
         const n = 2 ** z;
         const tx = Math.floor(mxC * n);
         const ty = Math.floor(myC * n);
-        const tile = this.maskTiles.get(`${z}/${tx}/${ty}`);
+        const tile = this.maskTiles.get(tileKey(z, tx, ty));
         if (!tile || tile.status !== 'loaded') continue;
         const localX = mxC * n - tx;
         const localY = myC * n - ty;
@@ -676,6 +691,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       // Accept both so this layer recognises Mapbox globe correctly.
       const proj = this.map.getProjection?.();
       const isGlobeProjection = proj?.type === 'globe' || proj?.name === 'globe';
+      this._isGlobe = isGlobeProjection;
       const isGlobeRendering = (pt !== undefined && pt > 0) ||
         (pt === undefined && isGlobeProjection);
       if (isGlobeRendering) {
@@ -796,7 +812,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
             if (!anyVisible) continue;
           }
           const tx = posMod(xi, n);
-          const key = `${z}/${tx}/${yi}`;
+          const key = tileKey(z, tx, yi);
           if (mask) {
             if (!this.maskTiles.has(key)) {
               this.loadMaskTile(z, tx, yi)
@@ -815,6 +831,20 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
     },
 
     initParticles(this: StreamlinesLayerThis): void {
+      const ps = this.particles;
+      if (ps.length === this.N) {
+        // Reuse the existing particle objects (mutate in place) so a
+        // camera-settle reseed doesn't churn N fresh allocations and leave
+        // the old array for GC. Mirrors the in-place recycle in
+        // updateParticles. makeParticle's return is a short-lived temp.
+        for (let i = 0; i < this.N; i++) {
+          const s = this.makeParticle();
+          const p = ps[i];
+          p.mx = s.mx; p.my = s.my; p.pmx = s.pmx; p.pmy = s.pmy;
+          p.age = s.age; p.speed = s.speed;
+        }
+        return;
+      }
       this.particles = [];
       for (let i = 0; i < this.N; i++) this.particles.push(this.makeParticle());
     },
@@ -983,9 +1013,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       // Bootstrap (no clipping plane yet): cap-sampling falls through to the
       // equal-area-on-sphere fallback; once render() populates the plane the
       // recycle pass moves any back-facing leftovers onto the cap.
-      const proj = this.map.getProjection?.();
-      const isGlobe = proj?.type === 'globe' || proj?.name === 'globe';
-      const useCapSampling = isGlobe && !this._globeBboxMode;
+      const useCapSampling = this._isGlobe && !this._globeBboxMode;
       const drawSeed = (): { mx: number; my: number } => {
         if (useCapSampling) {
           // Cap-sampling has its own internal rejection (near-pole), so
@@ -1047,7 +1075,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       const myC = Math.max(0, Math.min(1 - 1e-9, my));
       const tx = Math.floor(mxC * n);
       const ty = Math.floor(myC * n);
-      const tile = this.tiles.get(`${z}/${tx}/${ty}`);
+      const tile = this.tiles.get(tileKey(z, tx, ty));
       if (!tile || tile.status !== 'loaded') return null;
       const localX = mxC * n - tx;
       const localY = myC * n - ty;
@@ -1097,7 +1125,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
         const n = 2 ** z;
         const tx = Math.floor(mxC * n);
         const ty = Math.floor(myC * n);
-        const tile = this.tiles.get(`${z}/${tx}/${ty}`);
+        const tile = this.tiles.get(tileKey(z, tx, ty));
         if (!tile || tile.status !== 'loaded') continue;
         return this.sampleWindAtZoom(mx, my, z);
       }
@@ -1132,8 +1160,7 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       // flattened to a Mercator strip and pixel-density grows with zoom) we
       // get true Mercator scaling — without which jet-stream winds at zoom
       // 5+ skip multiple pixels per frame and the trail becomes dotted.
-      const proj = this.map.getProjection?.();
-      const isGlobe = proj?.type === 'globe' || proj?.name === 'globe';
+      const isGlobe = this._isGlobe;
       const zoom = this.map.getZoom();
       const eff = isGlobe
         ? this.speedScale * Math.min(0.25, Math.pow(0.5, zoom))
@@ -1346,23 +1373,39 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
         this._lastClippingPlane = n.defaultProjectionData?.clippingPlane;
       }
 
-      this.computeViewport();
-      this.ensureVisibleTilesLoading();
+      const proj = this.map.getProjection?.();
+      this._isGlobe = proj?.type === 'globe' || proj?.name === 'globe';
+
+      // Per-frame camera-state key drives two things: the move/settle trail
+      // handling below, and whether we can SKIP the per-frame viewport +
+      // visible-tile recompute. On a static map (the common "parked, watching
+      // the flow" case) the camera is unchanged, so computeViewport's ~8
+      // unprojects and ensureVisibleTilesLoading's tile-set rescan are pure
+      // waste — only the particle sim + GL passes need to run each frame.
+      // We watch zoom/center/pitch/bearing per frame rather than hooking
+      // 'move'/'zoomend' because those events lag the camera by hundreds of
+      // ms — long enough for a ghost box of particles to accumulate in the
+      // post-move trail buffer before an event-driven reseed could fire.
+      const cam = this.map;
+      const c = cam.getCenter();
+      const cameraKey = `${cam.getZoom()}|${c.lng}|${c.lat}|${cam.getPitch()}|${cam.getBearing()}`;
+      const cameraChanged = this._prevCameraKey !== cameraKey;
+
+      if (cameraChanged || !this.viewport) {
+        this.computeViewport();
+        this.ensureVisibleTilesLoading();
+      }
       if (this.particles.length === 0) {
         this.map.triggerRepaint();
         return;
       }
       this.setupFramebuffers();
 
-      // Per-frame camera-state check (replaces 'move'/'zoomend' handlers).
-      // While the camera is changing, wipe trails each frame so the stale
-      // pixels don't smear. The first frame after motion stops is the cue
-      // to reseed particles into the new viewport — at this point the
-      // camera has visually settled, well before MapLibre's zoomend fires.
-      const cam = this.map;
-      const c = cam.getCenter();
-      const cameraKey = `${cam.getZoom()}|${c.lng}|${c.lat}|${cam.getPitch()}|${cam.getBearing()}`;
-      if (this._prevCameraKey !== null && this._prevCameraKey !== cameraKey) {
+      // While the camera is changing, wipe trails each frame so stale
+      // screen-space pixels don't smear. The first frame after motion stops
+      // is the cue to reseed particles into the new viewport — at this point
+      // the camera has visually settled, well before MapLibre's zoomend.
+      if (this._prevCameraKey !== null && cameraChanged) {
         this.clearTrailBuffers();
         this._cameraMoving = true;
       } else if (this._cameraMoving) {
