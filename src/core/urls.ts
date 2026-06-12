@@ -1,6 +1,7 @@
-// URL construction helpers shared between MercatorLayer and the overlay
-// factories. Both pipelines turn a (DiscoveredItem, apiKey) pair into
-// concrete URL templates the underlying renderers/overlays consume.
+// URL + fetch helpers shared across the SDK: turning a (DiscoveredItem,
+// apiKey) pair into concrete URL templates the renderers/overlays consume,
+// plus the small relative-URL resolve and JSON-fetch primitives the STAC
+// walker needs.
 
 /**
  * Default STAC catalog URL. Used by every `MercatorLayer.create` call
@@ -52,4 +53,19 @@ export function expandTileUrl(template: string, z: number, x: number, y: number)
     .replace('{z}', String(z))
     .replace('{x}', String(x))
     .replace('{y}', String(y));
+}
+
+/** Resolve a relative href against a base URL via the URL constructor
+ *  (handles absolute, root-relative, and dot-segment hrefs, like a browser). */
+export function resolveUrl(base: string, href: string): string {
+  return new URL(href, base).toString();
+}
+
+/** Fetch a URL and parse the body as JSON, throwing on a non-2xx response. */
+export async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`@mercator-blue/sdk: fetch ${url} → HTTP ${res.status}`);
+  }
+  return (await res.json()) as T;
 }

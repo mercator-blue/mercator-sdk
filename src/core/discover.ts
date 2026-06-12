@@ -1,7 +1,9 @@
 // STAC traversal used by MercatorLayer.create() to discover the
-// latest item for a dataset. 
+// latest item for a dataset.
 
-/** 
+import { fetchJson, resolveUrl } from './urls';
+
+/**
  * A skeletal STAC Item shape — the SDK only reads the fields it needs. 
  */
 export interface DiscoveredItem {
@@ -187,19 +189,3 @@ export async function discoverLatestItem(
   };
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`@mercator-blue/sdk: fetch ${url} → HTTP ${res.status}`);
-  }
-  return (await res.json()) as T;
-}
-
-/**
- * Resolve a relative href against a base URL, mimicking how browsers
- * resolve URLs in HTML. We use the URL constructor - handles absolute
- * URLs, root-relative, dot-segments, etc. for us.
- */
-function resolveUrl(base: string, href: string): string {
-  return new URL(href, base).toString();
-}
