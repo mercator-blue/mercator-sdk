@@ -1,9 +1,9 @@
-// Minimal STAC traversal used by MercatorLayer.create() to discover the
-// latest item for a dataset. Walks the public STAC tree over plain HTTP
-// — no special caching, no Cloudflare service bindings (those are
-// site-only concerns; the SDK runs in customer browsers).
+// STAC traversal used by MercatorLayer.create() to discover the
+// latest item for a dataset. 
 
-/** A skeletal STAC Item shape — the SDK only reads the fields it needs. */
+/** 
+ * A skeletal STAC Item shape — the SDK only reads the fields it needs. 
+ */
 export interface DiscoveredItem {
   /** STAC item id, e.g. `"gfs/wind10m/2026051200/f000"`. */
   id: string;
@@ -116,7 +116,7 @@ interface ItemJson {
 }
 
 /**
- * Walk the catalog → find the dataset's collection → load the newest
+ * Walk the catalog, find the dataset's collection, load the newest
  * item. Returns a normalised {@link DiscoveredItem} for the SDK's
  * layer-builder to consume.
  */
@@ -144,7 +144,7 @@ export async function discoverLatestItem(
 
   // Pick the newest cycle's analysis (lowest forecast hour). Item hrefs are
   // "<cycle>/<fhour>/item.json" with `cycle` = YYYYMMDDHH and `fhour` =
-  // fNNN — both zero-padded, so lexical compare is chronological. We sort by
+  // fNNN - both zero-padded, so lexical compare is chronological. We sort by
   // (cycle desc, fhour asc) rather than trusting list position: the pipeline
   // emits items newest-cycle-FIRST, so a naive "last link is newest" picks
   // the OLDEST cycle — which the retention sweep has usually deleted, giving

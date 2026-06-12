@@ -2,7 +2,7 @@
  * Quick CSS-color → normalized RGBA parser, sized for the SDK's
  * WebGL uniform plumbing.
  *
- * Returns `[r, g, b, a]` in [0, 1] — ready to feed `gl.uniform4f` for
+ * Returns `[r, g, b, a]` in [0, 1] - ready to feed `gl.uniform4f` for
  * line/label colours.
  *
  * Accepts:
@@ -12,7 +12,7 @@
  * Anything else returns opaque black. This is a tight, performance-
  * minded parser for the SDK's own use; customers driving the bindings
  * pass simple values (the test pages, defaults from STAC). For style-
- * spec-grade parsing the host map library is authoritative — Mapbox
+ * spec-grade parsing the host map library is authoritative - Mapbox
  * /MapLibre style-spec colours don't flow through here.
  */
 export function parseCssColor(css: string): [number, number, number, number] {
