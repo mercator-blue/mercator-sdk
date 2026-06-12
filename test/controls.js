@@ -82,6 +82,11 @@ const GROUPS = {
         </label>
       </div>
       <div class="row sub">
+        <label>Trail res <span class="val" id="trailres-val">1.00</span>
+          <input id="trailres" type="range" min="25" max="100" step="5" value="100" />
+        </label>
+      </div>
+      <div class="row sub">
         <label class="cb"><input id="cbs" type="checkbox" /> Color particles by speed</label>
       </div>`;
   },
@@ -136,6 +141,7 @@ const FORMATS = {
   speed: (v) => (+v).toFixed(2),
   age: (v) => v,
   fade: (v) => ((+v) / 100).toFixed(2),
+  trailres: (v) => ((+v) / 100).toFixed(2),
 };
 
 /**
