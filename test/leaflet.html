@@ -368,6 +368,9 @@
   $('fade').addEventListener('input', () => {
     if (particlesLayer) particlesLayer.setFade((+$('fade').value) / 100);
   });
+  $('trailres').addEventListener('input', () => {
+    if (particlesLayer) particlesLayer.setTrailResolutionScale((+$('trailres').value) / 100);
+  });
   $('cbs').addEventListener('change', () => {
     if (particlesLayer) particlesLayer.setColorBySpeed($('cbs').checked);
   });

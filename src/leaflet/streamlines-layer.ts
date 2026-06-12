@@ -66,6 +66,13 @@ export type MercatorStreamlinesLayerOpts = MercatorStreamlinesOptions & {
   landmaskMaxZ?: number;
   /** Leaflet pane. Default `overlayPane`. */
   pane?: string;
+  /** Run the particle simulation on the GPU (texture GPGPU) instead of the
+   *  CPU loop. Default true. Set false to fall back to the CPU sim. */
+  gpuSim?: boolean;
+  /** Render the trail buffer at this fraction of device resolution (0.1..1).
+   *  Default 1. The trail fade + composite are full-canvas passes whose cost
+   *  scales with pixel count; 0.5 quarters them for slightly softer trails. */
+  trailResolutionScale?: number;
 };
 
 // -- Tile cache --------------------------------------------------------
@@ -157,6 +164,22 @@ import {
   FADE_FS,
   STREAMLINES_COMPOSITE_FS as COMPOSITE_FS,
 } from './shaders/index';
+import {
+  STREAMLINES_SIM_VS as SIM_VS,
+  STREAMLINES_SIM_FS as SIM_FS,
+} from '../core/shaders/index';
+
+// Resolution of the per-view velocity texture the GPU sim samples (assembled
+// on the CPU on viewport change). See the Mapbox binding for the rationale.
+const VEL_TEX_SIZE = 512;
+
+// Splice a `#define` in right after the `#version` directive (which must stay
+// the literal first line). Used to compile the points program with GPU_SIM.
+function injectDefine(src: string, define: string): string {
+  if (!define) return src;
+  const nl = src.indexOf('\n');
+  return src.slice(0, nl + 1) + define + '\n' + src.slice(nl + 1);
+}
 
 interface FB { fb: WebGLFramebuffer; tex: WebGLTexture; }
 
@@ -250,6 +273,24 @@ function ensureLayerClass(): any {
       this._lastCameraSig = '';
       this._cameraMoving = false;
       this._rAF = 0;
+
+      // GPU simulation state (gpuSim path). Position ping-pong textures +
+      // per-view velocity texture; reseeding stays on the CPU (round-robin).
+      this._gpuSim = opts.gpuSim ?? true;
+      this._trailScale = opts.trailResolutionScale ?? 1;
+      this._posTexA = null;
+      this._posTexB = null;
+      this._simFboA = null;
+      this._simFboB = null;
+      this._velTex = null;
+      this._texW = 0;
+      this._texH = 0;
+      this._posFrontIsA = true;
+      this._gpuReady = false;
+      this._velDirty = false;
+      this._seedOx = 0; this._seedOy = 0; this._seedSx = 1; this._seedSy = 1;
+      this._seedCursor = 0;
+      this._seedStaging = new Uint8Array(0);
     },
 
     onAdd(this: any, map: any): any {
@@ -309,6 +350,8 @@ function ensureLayerClass(): any {
       if (this._pointsProgram) gl.deleteProgram(this._pointsProgram);
       if (this._fadeProgram) gl.deleteProgram(this._fadeProgram);
       if (this._compProgram) gl.deleteProgram(this._compProgram);
+      if (this._simProgram) gl.deleteProgram(this._simProgram);
+      this._deleteGpuTextures();
       if (this._particleVbo) gl.deleteBuffer(this._particleVbo);
       if (this._quadVbo) gl.deleteBuffer(this._quadVbo);
       if (this._cornerVbo) gl.deleteBuffer(this._cornerVbo);
@@ -331,7 +374,8 @@ function ensureLayerClass(): any {
     _initGL(this: any): void {
       const gl = this._gl as WebGL2RenderingContext;
 
-      this._pointsProgram = createProgram(gl, POINTS_VS, POINTS_FS);
+      const gpuDefine = this._gpuSim ? '#define GPU_SIM' : '';
+      this._pointsProgram = createProgram(gl, injectDefine(POINTS_VS, gpuDefine), POINTS_FS);
       this._pointsAttrPrev = gl.getAttribLocation(this._pointsProgram, 'a_prev');
       this._pointsAttrCur = gl.getAttribLocation(this._pointsProgram, 'a_cur');
       this._pointsAttrSpeed = gl.getAttribLocation(this._pointsProgram, 'a_speed');
@@ -344,6 +388,16 @@ function ensureLayerClass(): any {
       this._pointsUVmax = gl.getUniformLocation(this._pointsProgram, 'u_vmax');
       this._pointsUColorBySpeed = gl.getUniformLocation(this._pointsProgram, 'u_colorBySpeed');
       this._pointsUColormap = gl.getUniformLocation(this._pointsProgram, 'u_colormap');
+      // GPU_SIM points uniforms (null when gpuSim off).
+      this._pointsUPosPrev = gl.getUniformLocation(this._pointsProgram, 'u_posPrev');
+      this._pointsUPosCur = gl.getUniformLocation(this._pointsProgram, 'u_posCur');
+      this._pointsUVelTexSpeed = gl.getUniformLocation(this._pointsProgram, 'u_velTex');
+      this._pointsUTexW = gl.getUniformLocation(this._pointsProgram, 'u_texW');
+      this._pointsUSeedOrigin = gl.getUniformLocation(this._pointsProgram, 'u_seedOrigin');
+      this._pointsUSeedSpan = gl.getUniformLocation(this._pointsProgram, 'u_seedSpan');
+      this._pointsUTl = gl.getUniformLocation(this._pointsProgram, 'u_tl');
+      this._pointsUDecScale = gl.getUniformLocation(this._pointsProgram, 'u_decScale');
+      this._pointsUDecOffset = gl.getUniformLocation(this._pointsProgram, 'u_decOffset');
 
       this._fadeProgram = createProgram(gl, QUAD_VS, FADE_FS);
       this._fadeAttrPos = gl.getAttribLocation(this._fadeProgram, 'a_pos');
@@ -391,6 +445,197 @@ function ensureLayerClass(): any {
       this._fbH = 0;
       this._fbA = null;
       this._fbB = null;
+
+      // GPU sim program + position/velocity textures.
+      if (this._gpuSim) {
+        this._simProgram = createProgram(gl, SIM_VS, SIM_FS);
+        this._simAttrPos = gl.getAttribLocation(this._simProgram, 'a_pos');
+        this._simUPosIn = gl.getUniformLocation(this._simProgram, 'u_posIn');
+        this._simUVelTex = gl.getUniformLocation(this._simProgram, 'u_velTex');
+        this._simUVelSize = gl.getUniformLocation(this._simProgram, 'u_velSize');
+        this._simUSeedSpan = gl.getUniformLocation(this._simProgram, 'u_seedSpan');
+        this._simUDecScale = gl.getUniformLocation(this._simProgram, 'u_decScale');
+        this._simUDecOffset = gl.getUniformLocation(this._simProgram, 'u_decOffset');
+        this._simUEff = gl.getUniformLocation(this._simProgram, 'u_eff');
+        this._simUMinStep = gl.getUniformLocation(this._simProgram, 'u_minStepMerc');
+        this._setupGpuTextures();
+      }
+    },
+
+    /** Create (or recreate) the position ping-pong textures + sim FBOs and the
+     *  velocity texture. Sized from N (one texel per particle). */
+    _setupGpuTextures(this: any): void {
+      const gl = this._gl as WebGL2RenderingContext;
+      this._deleteGpuTextures();
+      const texW = Math.max(1, Math.ceil(Math.sqrt(this._N)));
+      const texH = Math.max(1, Math.ceil(this._N / texW));
+      this._texW = texW;
+      this._texH = texH;
+      const mkTex = (w: number, h: number): WebGLTexture => {
+        const t = gl.createTexture()!;
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        return t;
+      };
+      this._posTexA = mkTex(texW, texH);
+      this._posTexB = mkTex(texW, texH);
+      this._velTex = mkTex(VEL_TEX_SIZE, VEL_TEX_SIZE);
+      const mkFbo = (tex: WebGLTexture): WebGLFramebuffer => {
+        const fb = gl.createFramebuffer()!;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        return fb;
+      };
+      this._simFboA = mkFbo(this._posTexA);
+      this._simFboB = mkFbo(this._posTexB);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      this._posFrontIsA = true;
+      this._seedCursor = 0;
+      this._seedStaging = new Uint8Array(texW * texH * 4);
+    },
+
+    _deleteGpuTextures(this: any): void {
+      const gl = this._gl as WebGL2RenderingContext | null;
+      if (!gl) return;
+      if (this._posTexA) { gl.deleteTexture(this._posTexA); this._posTexA = null; }
+      if (this._posTexB) { gl.deleteTexture(this._posTexB); this._posTexB = null; }
+      if (this._velTex) { gl.deleteTexture(this._velTex); this._velTex = null; }
+      if (this._simFboA) { gl.deleteFramebuffer(this._simFboA); this._simFboA = null; }
+      if (this._simFboB) { gl.deleteFramebuffer(this._simFboB); this._simFboB = null; }
+    },
+
+    /** Padded seed bbox (mercator), matching _step_simulation's seed range,
+     *  with the Mercator-band Y clamp. Sets the _seedOx/_seedOy/_seedSx/_seedSy
+     *  frame for the velocity texture, position encoding, and the points
+     *  u_seedOrigin/u_seedSpan. */
+    _computeSeedBbox(this: any, tlMx: number, tlMy: number, brMx: number, brMy: number): void {
+      const sx = brMx - tlMx;
+      const sy = brMy - tlMy;
+      const seedXMin = tlMx - SEED_MARGIN * sx;
+      const seedYMin = Math.max(0.005, tlMy - SEED_MARGIN * sy);
+      const seedYMax = Math.min(0.995, brMy + SEED_MARGIN * sy);
+      this._seedOx = seedXMin;
+      this._seedOy = seedYMin;
+      this._seedSx = sx * (1 + 2 * SEED_MARGIN);
+      this._seedSy = Math.max(1e-9, seedYMax - seedYMin);
+    },
+
+    /** Assemble the per-view velocity texture (vector_rg_ba, NEAREST) from the
+     *  loaded tiles over the padded seed bbox. Land / no-data → all-zero
+     *  sentinel (folded in via _sample). Rebuilt only on viewport change. */
+    _assembleVelTex(this: any, dataZ: number): void {
+      const gl = this._gl as WebGL2RenderingContext;
+      if (!this._velTex) return;
+      const S = VEL_TEX_SIZE;
+      const buf = new Uint8Array(S * S * 4);
+      const sc = this._item.encoding.scale as number;
+      const off = this._item.encoding.offset as number;
+      const ox = this._seedOx, oy = this._seedOy, sxx = this._seedSx, syy = this._seedSy;
+      for (let j = 0; j < S; j++) {
+        const my = oy + ((j + 0.5) / S) * syy;
+        for (let i = 0; i < S; i++) {
+          const mx = ox + ((i + 0.5) / S) * sxx;
+          const s = this._sample(mx, my, dataZ); // null over land / no-data
+          if (!s) continue;
+          const uq = Math.max(0, Math.min(65535, Math.round((s.u - off) / sc)));
+          const vq = Math.max(0, Math.min(65535, Math.round((s.v - off) / sc)));
+          let R = uq >> 8; let G = uq & 255;
+          const B = vq >> 8; const A = vq & 255;
+          if ((R | G | B | A) === 0) G = 1;
+          const idx = (j * S + i) * 4;
+          buf[idx] = R; buf[idx + 1] = G; buf[idx + 2] = B; buf[idx + 3] = A;
+        }
+      }
+      gl.bindTexture(gl.TEXTURE_2D, this._velTex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, S, S, 0, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    },
+
+    /** Encode one CPU seed into 4 bytes at `off` (viewport-local 16-bit/axis),
+     *  or the all-zero dead sentinel if the seed lands on no-data. */
+    _encodeSeedInto(this: any, b: Uint8Array, off: number, dataZ: number): void {
+      const mx = this._seedOx + Math.random() * this._seedSx;
+      const my = this._seedOy + Math.random() * this._seedSy;
+      const s = this._sample(mx, my, dataZ);
+      if (!s) { b[off] = 0; b[off + 1] = 0; b[off + 2] = 0; b[off + 3] = 0; return; }
+      let qx = Math.max(0, Math.min(65535, Math.round(((mx - this._seedOx) / this._seedSx) * 65535)));
+      const qy = Math.max(0, Math.min(65535, Math.round(((my - this._seedOy) / this._seedSy) * 65535)));
+      if (qx === 0 && qy === 0) qx = 1;
+      b[off] = qx >> 8; b[off + 1] = qx & 255;
+      b[off + 2] = qy >> 8; b[off + 3] = qy & 255;
+    },
+
+    /** Seed all N particles into the current FRONT position texture. */
+    _fullReseedGpu(this: any, dataZ: number): void {
+      const gl = this._gl as WebGL2RenderingContext;
+      const front = this._posFrontIsA ? this._posTexA : this._posTexB;
+      if (!front) return;
+      const buf = this._seedStaging as Uint8Array;
+      buf.fill(0);
+      for (let i = 0; i < this._N; i++) this._encodeSeedInto(buf, i * 4, dataZ);
+      gl.bindTexture(gl.TEXTURE_2D, front);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, this._texW, this._texH, 0, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+      this._seedCursor = 0;
+    },
+
+    /** Refresh ~N/maxAge particles per frame, round-robin, into FRONT. */
+    _reseedRoundRobinGpu(this: any, dataZ: number): void {
+      const gl = this._gl as WebGL2RenderingContext;
+      const front = this._posFrontIsA ? this._posTexA : this._posTexB;
+      if (!front) return;
+      let count = Math.ceil(this._N / Math.max(1, this._maxAge));
+      if (count <= 0) return;
+      gl.bindTexture(gl.TEXTURE_2D, front);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      let idx = this._seedCursor;
+      while (count > 0) {
+        const row = Math.floor(idx / this._texW);
+        const col = idx % this._texW;
+        const n = Math.min(count, this._texW - col, this._N - idx);
+        const seg = new Uint8Array(n * 4);
+        for (let k = 0; k < n; k++) this._encodeSeedInto(seg, k * 4, dataZ);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, col, row, n, 1, gl.RGBA, gl.UNSIGNED_BYTE, seg);
+        count -= n;
+        idx += n;
+        if (idx >= this._N) idx = 0;
+      }
+      this._seedCursor = idx;
+    },
+
+    /** Advance every particle one step: FRONT -> BACK fragment-shader pass. */
+    _simStepGpu(this: any, viewZoom: number, tlMx: number, brMx: number): void {
+      const gl = this._gl as WebGL2RenderingContext;
+      if (!this._simProgram || !this._velTex) return;
+      const front = this._posFrontIsA ? this._posTexA : this._posTexB;
+      const backFbo = this._posFrontIsA ? this._simFboB : this._simFboA;
+      if (!front || !backFbo) return;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, backFbo);
+      gl.viewport(0, 0, this._texW, this._texH);
+      gl.disable(gl.BLEND);
+      gl.useProgram(this._simProgram);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._quadVbo);
+      gl.enableVertexAttribArray(this._simAttrPos);
+      gl.vertexAttribPointer(this._simAttrPos, 2, gl.FLOAT, false, 0, 0);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, front);
+      gl.uniform1i(this._simUPosIn, 0);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this._velTex);
+      gl.uniform1i(this._simUVelTex, 1);
+      gl.uniform2i(this._simUVelSize, VEL_TEX_SIZE, VEL_TEX_SIZE);
+      gl.uniform2f(this._simUSeedSpan, this._seedSx, this._seedSy);
+      gl.uniform1f(this._simUDecScale, this._item.encoding.scale);
+      gl.uniform1f(this._simUDecOffset, this._item.encoding.offset);
+      gl.uniform1f(this._simUEff, this._speedScale * Math.pow(0.5, viewZoom));
+      const pxPerMercator = this._canvas.width / Math.max(brMx - tlMx, 1e-9);
+      gl.uniform1f(this._simUMinStep, MIN_STEP_PIXELS / pxPerMercator);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.disableVertexAttribArray(this._simAttrPos);
     },
 
     _ensureFbos(this: any, w: number, h: number): void {
@@ -462,12 +707,16 @@ function ensureLayerClass(): any {
       canvas.style.height = `${size.y}px`;
       const newW = Math.round(size.x * dpr);
       const newH = Math.round(size.y * dpr);
+      // Trail FBOs can run below device resolution (trailScale); the canvas
+      // itself stays full-size and the composite upscales on the way out.
+      const fbW = Math.max(1, Math.round(newW * this._trailScale));
+      const fbH = Math.max(1, Math.round(newH * this._trailScale));
       if (canvas.width !== newW || canvas.height !== newH) {
         canvas.width = newW;
         canvas.height = newH;
-        this._ensureFbos(newW, newH);
-      } else if (!this._fbA) {
-        this._ensureFbos(newW, newH);
+        this._ensureFbos(fbW, fbH);
+      } else if (!this._fbA || this._fbW !== fbW || this._fbH !== fbH) {
+        this._ensureFbos(fbW, fbH);
       }
       const tlLayer = map.containerPointToLayerPoint([0, 0]);
       L.DomUtil.setPosition(canvas, tlLayer);
@@ -508,7 +757,9 @@ function ensureLayerClass(): any {
           if (this._cache.has(key)) continue;
           // Fire and forget — `_sample` returns null for not-yet-loaded
           // tiles and the affected particles recycle until the data lands.
-          void loadTile(this._cache, this._tileUrlTemplate, this._item.encoding, z, tx, yi);
+          // Mark the velocity texture dirty on completion (GPU sim re-snapshots).
+          void loadTile(this._cache, this._tileUrlTemplate, this._item.encoding, z, tx, yi)
+            .then(() => { this._velDirty = true; });
         }
       }
     },
@@ -527,7 +778,8 @@ function ensureLayerClass(): any {
         for (let yi = yLo; yi <= yHi; yi++) {
           const key = `${maskZ}/${tx}/${yi}`;
           if (this._maskCache.has(key)) continue;
-          void loadMaskTile(this._maskCache, this._landmaskUrlTemplate, maskZ, tx, yi);
+          void loadMaskTile(this._maskCache, this._landmaskUrlTemplate, maskZ, tx, yi)
+            .then(() => { this._velDirty = true; });
         }
       }
     },
@@ -752,22 +1004,45 @@ function ensureLayerClass(): any {
       this._ensureTilesAtZoom(dataZ, tlMx, tlMy, brMx, brMy);
       this._ensureMaskTilesAtZoom(this._maskTargetZ, tlMx, tlMy, brMx, brMy);
 
-      // First stable frame after motion: reseed across new viewport.
-      // Order matters — must come AFTER tile loads kick off so the sample
-      // call below has something to draw from (or sets speed=-1 for now).
+      // The padded seed bbox is the shared frame for the velocity texture,
+      // the position encoding, and the points projection (GPU sim only).
+      if (this._gpuSim) this._computeSeedBbox(tlMx, tlMy, brMx, brMy);
+
+      // First stable frame after motion: reseed across new viewport. The GPU
+      // path also rebuilds its per-view velocity texture here. Order matters —
+      // after tile-load kicks so the samples have something to draw from.
       if (!cameraChanged && !animatingZoom && this._cameraMoving) {
-        this._reseedAll(tlMx, tlMy, brMx, brMy, dataZ);
+        if (this._gpuSim) {
+          this._assembleVelTex(dataZ);
+          this._fullReseedGpu(dataZ);
+          this._gpuReady = true;
+        } else {
+          this._reseedAll(tlMx, tlMy, brMx, brMy, dataZ);
+        }
         this._clearTrails();
         this._cameraMoving = false;
       }
 
-      // CPU sim.
-      this._step_simulation(dataZ, tlMx, tlMy, brMx, brMy, z);
-
-      // Upload particle buffer. Pre-allocated in `_initGL`; bufferSubData
-      // updates in-place without orphaning.
-      gl.bindBuffer(gl.ARRAY_BUFFER, this._particleVbo);
-      gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._buf);
+      if (this._gpuSim) {
+        // GPU sim: advance positions on the GPU; reseed a slice on the CPU.
+        if (this._gpuReady) {
+          // A tile loaded while parked → re-snapshot the velocity texture
+          // (skipped mid-move; the settle branch above covers that case).
+          if (this._velDirty && !this._cameraMoving) {
+            this._assembleVelTex(dataZ);
+            this._velDirty = false;
+          }
+          this._reseedRoundRobinGpu(dataZ);
+          this._simStepGpu(z, tlMx, brMx);
+        }
+      } else {
+        // CPU sim.
+        this._step_simulation(dataZ, tlMx, tlMy, brMx, brMy, z);
+        // Upload particle buffer. Pre-allocated in `_initGL`; bufferSubData
+        // updates in-place without orphaning.
+        gl.bindBuffer(gl.ARRAY_BUFFER, this._particleVbo);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._buf);
+      }
 
       const fbA = this._fbA as FB;
       const fbB = this._fbB as FB;
@@ -790,18 +1065,42 @@ function ensureLayerClass(): any {
       // expands its prev->cur into a screen-space quad in the vertex shader.
       gl.useProgram(this._pointsProgram);
 
-      // Per-instance attributes (divisor 1): prev (vec2), cur (vec2), speed.
-      gl.bindBuffer(gl.ARRAY_BUFFER, this._particleVbo);
-      const stride = 5 * 4;
-      gl.enableVertexAttribArray(this._pointsAttrPrev);
-      gl.vertexAttribPointer(this._pointsAttrPrev, 2, gl.FLOAT, false, stride, 0);
-      gl.vertexAttribDivisor(this._pointsAttrPrev, 1);
-      gl.enableVertexAttribArray(this._pointsAttrCur);
-      gl.vertexAttribPointer(this._pointsAttrCur, 2, gl.FLOAT, false, stride, 2 * 4);
-      gl.vertexAttribDivisor(this._pointsAttrCur, 1);
-      gl.enableVertexAttribArray(this._pointsAttrSpeed);
-      gl.vertexAttribPointer(this._pointsAttrSpeed, 1, gl.FLOAT, false, stride, 4 * 4);
-      gl.vertexAttribDivisor(this._pointsAttrSpeed, 1);
+      if (this._gpuSim) {
+        // Positions from the ping-pong textures (prev = FRONT, cur = BACK)
+        // plus the velocity texture for color-by-speed. Units 0/1 are used by
+        // the fade pass + colormap; bind ours on 2/3/4. No per-instance attrs.
+        const front = this._posFrontIsA ? this._posTexA : this._posTexB;
+        const back = this._posFrontIsA ? this._posTexB : this._posTexA;
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, front);
+        gl.uniform1i(this._pointsUPosPrev, 2);
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_2D, back);
+        gl.uniform1i(this._pointsUPosCur, 3);
+        gl.activeTexture(gl.TEXTURE4);
+        gl.bindTexture(gl.TEXTURE_2D, this._velTex);
+        gl.uniform1i(this._pointsUVelTexSpeed, 4);
+        gl.uniform1i(this._pointsUTexW, this._texW);
+        gl.uniform2f(this._pointsUSeedOrigin, this._seedOx, this._seedOy);
+        gl.uniform2f(this._pointsUSeedSpan, this._seedSx, this._seedSy);
+        gl.uniform2f(this._pointsUTl, tlMx, tlMy);
+        gl.uniform1f(this._pointsUDecScale, this._item.encoding.scale);
+        gl.uniform1f(this._pointsUDecOffset, this._item.encoding.offset);
+        gl.activeTexture(gl.TEXTURE0);
+      } else {
+        // Per-instance attributes (divisor 1): prev (vec2), cur (vec2), speed.
+        gl.bindBuffer(gl.ARRAY_BUFFER, this._particleVbo);
+        const stride = 5 * 4;
+        gl.enableVertexAttribArray(this._pointsAttrPrev);
+        gl.vertexAttribPointer(this._pointsAttrPrev, 2, gl.FLOAT, false, stride, 0);
+        gl.vertexAttribDivisor(this._pointsAttrPrev, 1);
+        gl.enableVertexAttribArray(this._pointsAttrCur);
+        gl.vertexAttribPointer(this._pointsAttrCur, 2, gl.FLOAT, false, stride, 2 * 4);
+        gl.vertexAttribDivisor(this._pointsAttrCur, 1);
+        gl.enableVertexAttribArray(this._pointsAttrSpeed);
+        gl.vertexAttribPointer(this._pointsAttrSpeed, 1, gl.FLOAT, false, stride, 4 * 4);
+        gl.vertexAttribDivisor(this._pointsAttrSpeed, 1);
+      }
 
       // Per-vertex corner (end, side) — divisor 0 (advances per vertex).
       gl.bindBuffer(gl.ARRAY_BUFFER, this._cornerVbo);
@@ -818,7 +1117,9 @@ function ensureLayerClass(): any {
       // DPR=2 screen a `pointSize: 3` line is 1.5 CSS px wide).
       gl.uniform2f(this._pointsUProjScale, (2 * S) / W_css, -(2 * S) / H_css);
       gl.uniform2f(this._pointsUViewport, this._fbW, this._fbH);
-      gl.uniform1f(this._pointsULineWidth, this._pointSize);
+      // Line width is in trail-FBO pixels (u_viewport is the FBO size); scale
+      // it with the trail resolution so the on-screen width stays fixed.
+      gl.uniform1f(this._pointsULineWidth, this._pointSize * this._trailScale);
       gl.uniform1f(this._pointsUOpacity, 1.0);
       gl.uniform1f(this._pointsUVmin, this._vmin);
       gl.uniform1f(this._pointsUVmax, this._vmax);
@@ -841,16 +1142,19 @@ function ensureLayerClass(): any {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE);
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, this._N);
-      // Reset per-instance divisors immediately: they're VAO state on the
-      // shared default VAO, so a leaked divisor=1 would corrupt the
-      // composite pass below (and the fade pass next frame), which draw
-      // with plain divisor-0 quad arrays.
-      gl.vertexAttribDivisor(this._pointsAttrPrev, 0);
-      gl.vertexAttribDivisor(this._pointsAttrCur, 0);
-      gl.vertexAttribDivisor(this._pointsAttrSpeed, 0);
-      gl.disableVertexAttribArray(this._pointsAttrPrev);
-      gl.disableVertexAttribArray(this._pointsAttrCur);
-      gl.disableVertexAttribArray(this._pointsAttrSpeed);
+      if (!this._gpuSim) {
+        // Reset per-instance divisors immediately: they're VAO state on the
+        // shared default VAO, so a leaked divisor=1 would corrupt the
+        // composite pass below (and the fade pass next frame), which draw
+        // with plain divisor-0 quad arrays. (GPU_SIM has no per-instance
+        // attributes — their locations are -1, so skip.)
+        gl.vertexAttribDivisor(this._pointsAttrPrev, 0);
+        gl.vertexAttribDivisor(this._pointsAttrCur, 0);
+        gl.vertexAttribDivisor(this._pointsAttrSpeed, 0);
+        gl.disableVertexAttribArray(this._pointsAttrPrev);
+        gl.disableVertexAttribArray(this._pointsAttrCur);
+        gl.disableVertexAttribArray(this._pointsAttrSpeed);
+      }
       gl.disableVertexAttribArray(this._pointsAttrCorner);
 
       // ----- Pass 3: composite fbB to canvas at user opacity -----
@@ -872,6 +1176,8 @@ function ensureLayerClass(): any {
       // Swap FBOs for the next frame.
       this._fbA = fbB;
       this._fbB = fbA;
+      // Swap the position ping-pong: this frame's BACK becomes next FRONT.
+      if (this._gpuSim) this._posFrontIsA = !this._posFrontIsA;
     },
 
     // ----- Public runtime setters -----
@@ -894,10 +1200,24 @@ function ensureLayerClass(): any {
         gl.bindBuffer(gl.ARRAY_BUFFER, this._particleVbo);
         gl.bufferData(gl.ARRAY_BUFFER, this._buf.byteLength, gl.DYNAMIC_DRAW);
       }
+      // GPU sim: resize the position textures (one texel/particle). The
+      // velocity texture is recreated empty; the stable-frame reseed below
+      // reassembles it.
+      if (this._gpuSim && gl) {
+        this._gpuReady = false;
+        this._setupGpuTextures();
+      }
       // Will reseed across the current viewport on the next stable frame.
       this._cameraMoving = true;
     },
     setPointSize(this: any, s: number): void { this._pointSize = s; },
+    setTrailResolutionScale(this: any, s: number): void {
+      this._trailScale = Math.max(0.1, Math.min(1, s));
+      // Re-anchor rebuilds the FBOs at the new size; clear so the old-res
+      // trail doesn't linger upscaled for a frame.
+      this._anchorCanvas();
+      this._clearTrails();
+    },
     setSpeedScale(this: any, s: number): void { this._speedScale = s; },
     setMaxAge(this: any, a: number): void { this._maxAge = a; },
     setColorBySpeed(this: any, c: boolean): void { this._colorBySpeed = !!c; },
@@ -917,6 +1237,7 @@ function ensureLayerClass(): any {
       if (p.fade != null) this.setFade(p.fade);
       if (p.particleCount != null) this.setParticleCount(p.particleCount);
       if (p.pointSize != null) this.setPointSize(p.pointSize);
+      if (p.trailResolutionScale != null) this.setTrailResolutionScale(p.trailResolutionScale);
       if (p.speedScale != null) this.setSpeedScale(p.speedScale);
       if (p.maxAge != null) this.setMaxAge(p.maxAge);
       if (p.colorBySpeed != null) this.setColorBySpeed(p.colorBySpeed);
