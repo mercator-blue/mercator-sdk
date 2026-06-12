@@ -20,7 +20,7 @@
 
 import { createProgram } from '../core/webgl-helpers';
 import { lngToTileX, latToTileY } from '../core/mercator';
-import { parseCssColor } from '../core/css-color';
+import { parseCssColor } from '../core/color/css-color';
 import { normalizeRenderArgs, type NormalisedRenderArgs } from './host-adapter';
 import { CONTOUR_LINES_VS, CONTOUR_LINES_FS } from './shaders/index.js';
 import { ContourTileCache } from '../core/contour-tiles';

@@ -28,7 +28,7 @@ import {
   tilePixelToLngLat,
 } from '../core/mercator';
 import { loadTilePixels } from '../core/tile-pixel-reader';
-import { resolveColormap, sampleColormapCss } from '../core/colormaps';
+import { resolveColormap, sampleColormapCss } from '../core/color/colormaps';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
 import { withApiKey, absolutiseUrl, expandTileUrl, DEFAULT_CATALOG_URL } from '../core/urls';
 import type { ColormapSpec, MercatorArrowsOptions } from '../core/types';
@@ -136,8 +136,6 @@ async function loadTile(
   return promise;
 }
 
-/** Sample a `Float32Array` 16-stop colormap at t ∈ [0,1]. Returns an
- *  `rgb(…)` string ready for Canvas2D `strokeStyle`. */
 let LayerClass: any = null;
 
 function ensureLayerClass(): any {

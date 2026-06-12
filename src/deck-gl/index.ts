@@ -33,7 +33,7 @@ import type {
 } from '../core/types';
 import type { DiscoveredItem as _DiscoveredItem } from '../core/discover';
 import { discoverLatestItem as _discoverLatestItem } from '../core/discover';
-import { PALETTES as _PALETTES, resolveColormap as _resolveColormap } from '../core/colormaps';
+import { PALETTES as _PALETTES, resolveColormap as _resolveColormap } from '../core/color/colormaps';
 
 /** Visualization kinds the layer can render. See {@link MercatorLayerOptions}. */
 export type VisualizationKind = _VisualizationKind;

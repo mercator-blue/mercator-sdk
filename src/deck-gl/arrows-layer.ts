@@ -18,7 +18,7 @@ import { LineLayer } from '@deck.gl/layers';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
 import { withApiKey, DEFAULT_CATALOG_URL } from '../core/urls';
 import { loadTilePixels } from '../core/tile-pixel-reader';
-import { resolveColormap, COLORMAP_SIZE } from '../core/colormaps';
+import { resolveColormap, COLORMAP_SIZE } from '../core/color/colormaps';
 import {
   lngToTileX,
   latToTileY,

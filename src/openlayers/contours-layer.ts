@@ -40,7 +40,7 @@ import { ContourTileCache } from '../core/contour-tiles';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
 import { withApiKey, absolutiseUrl, DEFAULT_CATALOG_URL } from '../core/urls';
 import { createProgram } from '../core/webgl-helpers';
-import { parseCssColor } from '../core/css-color';
+import { parseCssColor } from '../core/color/css-color';
 import type { MercatorContoursOptions } from '../core/types';
 
 import { HALF_MERCATOR, WORLD_EXT_3857 } from '../core/mercator';

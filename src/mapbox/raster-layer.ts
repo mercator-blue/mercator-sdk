@@ -11,8 +11,8 @@
 
 import { createProgram } from '../core/webgl-helpers';
 import { lngLatToTileXY, posMod } from '../core/mercator';
-import { resolveColormap } from '../core/colormaps';
-import { uploadColormapTexture } from '../core/colormap-texture';
+import { resolveColormap } from '../core/color/colormaps';
+import { uploadColormapTexture } from '../core/color/colormap-texture';
 import type { ColormapSpec, EncodingKind } from '../core/types';
 import { normalizeRenderArgs, type NormalisedRenderArgs } from './host-adapter';
 import { expandTileUrl } from '../core/urls';

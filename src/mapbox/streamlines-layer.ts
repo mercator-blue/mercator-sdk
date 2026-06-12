@@ -13,8 +13,8 @@
 import { createProgram } from '../core/webgl-helpers';
 import { posMod } from '../core/mercator';
 import { loadTilePixels } from '../core/tile-pixel-reader';
-import { resolveColormap } from '../core/colormaps';
-import { uploadColormapTexture } from '../core/colormap-texture';
+import { resolveColormap } from '../core/color/colormaps';
+import { uploadColormapTexture } from '../core/color/colormap-texture';
 import type { ColormapSpec } from '../core/types';
 import { expandTileUrl } from '../core/urls';
 import {

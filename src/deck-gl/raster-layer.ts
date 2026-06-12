@@ -19,7 +19,7 @@ import { CompositeLayer, type DefaultProps, type LayersList } from '@deck.gl/cor
 import { TileLayer } from '@deck.gl/geo-layers';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
 import { withApiKey, DEFAULT_CATALOG_URL } from '../core/urls';
-import { resolveColormap } from '../core/colormaps';
+import { resolveColormap } from '../core/color/colormaps';
 import type { ColormapSpec } from '../core/types';
 import { ValueDecodedBitmapLayer } from './value-decoded-bitmap-layer.js';
 import { ElevationBitmapLayer } from './elevation-bitmap-layer.js';

@@ -40,7 +40,7 @@ import WebGLTileLayer from 'ol/layer/WebGLTile.js';
 import ImageTileSource from 'ol/source/ImageTile.js';
 import type { ExpressionValue } from 'ol/expr/expression.js';
 
-import { resolveColormap, COLORMAP_SIZE } from '../core/colormaps';
+import { resolveColormap, COLORMAP_SIZE } from '../core/color/colormaps';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
 import { withApiKey, DEFAULT_CATALOG_URL } from '../core/urls';
 import type { ColormapSpec, MercatorRasterOptions } from '../core/types';

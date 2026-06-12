@@ -49,8 +49,8 @@ import type { FrameState } from 'ol/Map.js';
 import { loadTilePixels } from '../core/tile-pixel-reader';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
 import { withApiKey, absolutiseUrl, expandTileUrl, DEFAULT_CATALOG_URL } from '../core/urls';
-import { resolveColormap } from '../core/colormaps';
-import { uploadColormapTexture } from '../core/colormap-texture';
+import { resolveColormap } from '../core/color/colormaps';
+import { uploadColormapTexture } from '../core/color/colormap-texture';
 import type { ColormapSpec, MercatorStreamlinesOptions } from '../core/types';
 import { createProgram } from '../core/webgl-helpers';
 

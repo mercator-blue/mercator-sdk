@@ -31,8 +31,8 @@ import {
   RASTER_VECTOR_FS as VECTOR_FS,
   RASTER_ELEVATION_FS as ELEVATION_FS,
 } from '../core/shaders/index';
-import { resolveColormap } from '../core/colormaps';
-import { uploadColormapTexture } from '../core/colormap-texture';
+import { resolveColormap } from '../core/color/colormaps';
+import { uploadColormapTexture } from '../core/color/colormap-texture';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
 import { withApiKey, expandTileUrl, DEFAULT_CATALOG_URL } from '../core/urls';
 import { posMod } from '../core/mercator';

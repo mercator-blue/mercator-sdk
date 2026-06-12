@@ -38,7 +38,7 @@ import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
 import { withApiKey, absolutiseUrl, DEFAULT_CATALOG_URL } from '../core/urls';
 import { createProgram } from '../core/webgl-helpers';
 import type { MercatorContoursOptions } from '../core/types';
-import { parseCssColor } from '../core/css-color';
+import { parseCssColor } from '../core/color/css-color';
 
 
 // Label-placement tunables (CSS pixels).

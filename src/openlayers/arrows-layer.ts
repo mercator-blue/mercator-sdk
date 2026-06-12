@@ -38,7 +38,7 @@ import type { FrameState } from 'ol/Map.js';
 import { loadTilePixels } from '../core/tile-pixel-reader';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
 import { withApiKey, absolutiseUrl, expandTileUrl, DEFAULT_CATALOG_URL } from '../core/urls';
-import { resolveColormap, sampleColormapCss } from '../core/colormaps';
+import { resolveColormap, sampleColormapCss } from '../core/color/colormaps';
 import type { ColormapSpec, MercatorArrowsOptions } from '../core/types';
 
 import { HALF_MERCATOR, WORLD_EXT_3857 } from '../core/mercator';

@@ -23,7 +23,7 @@ import { Layer, type DefaultProps, type LayerContext } from '@deck.gl/core';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
 import { withApiKey, DEFAULT_CATALOG_URL } from '../core/urls';
 import { loadTilePixels } from '../core/tile-pixel-reader';
-import { resolveColormap, COLORMAP_SIZE } from '../core/colormaps';
+import { resolveColormap, COLORMAP_SIZE } from '../core/color/colormaps';
 import { lngLatToMercator, posMod } from '../core/mercator';
 import type { ColormapSpec } from '../core/types';
 import { createProgram } from '../core/webgl-helpers';

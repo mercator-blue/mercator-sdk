@@ -30,7 +30,7 @@
  * colour) read the array directly and are resolution-agnostic.
  */
 
-import type { Colormap, ColormapSpec } from './types';
+import type { Colormap, ColormapSpec } from '../types';
 import { PALETTES as _PALETTES, PALETTE_SIZE } from './palettes';
 
 /** The built-in colormap palettes (viridis, turbo, magma, ...), keyed by name.

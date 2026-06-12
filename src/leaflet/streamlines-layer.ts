@@ -33,8 +33,8 @@
 
 import { lngToTileX, latToTileY, posMod } from '../core/mercator';
 import { loadTilePixels } from '../core/tile-pixel-reader';
-import { resolveColormap } from '../core/colormaps';
-import { uploadColormapTexture } from '../core/colormap-texture';
+import { resolveColormap } from '../core/color/colormaps';
+import { uploadColormapTexture } from '../core/color/colormap-texture';
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
 import { withApiKey, absolutiseUrl, expandTileUrl, DEFAULT_CATALOG_URL } from '../core/urls';
 import type { ColormapSpec, MercatorStreamlinesOptions } from '../core/types';
