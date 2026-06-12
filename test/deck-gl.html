@@ -316,6 +316,8 @@
         maxAge: (+$('age').value) * 60,
         // fade slider is 85..99; layer wants 0..1.
         fade: (+$('fade').value) / 100,
+        // trail-res slider is 25..100 (%); layer wants 0.1..1.
+        trailResolutionScale: (+$('trailres').value) / 100,
         colorBySpeed: $('cbs').checked,
       }, currentItem));
     }
@@ -378,7 +380,7 @@
   // Particle-knob sliders: rebuild the streamlines layer on each change.
   // deck.gl reconciles by id so GPU resources (FBOs, programs) survive;
   // only the props change.
-  for (const id of ['count', 'size', 'speed', 'age', 'fade']) {
+  for (const id of ['count', 'size', 'speed', 'age', 'fade', 'trailres']) {
     $(id).addEventListener('input', refreshLayers);
   }
   $('cbs').addEventListener('change', refreshLayers);
