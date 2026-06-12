@@ -400,6 +400,11 @@
       particlesLayer.setColorBySpeed($('cbs').checked);
     }
   });
+  $('trailres').addEventListener('input', () => {
+    if (particlesLayer && particlesLayer.setTrailResolutionScale) {
+      particlesLayer.setTrailResolutionScale((+$('trailres').value) / 100);
+    }
+  });
 
   // ---------- contours ----------
   function setupContoursControl() {
