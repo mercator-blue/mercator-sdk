@@ -44,7 +44,9 @@ export function absolutiseUrl(template: string, itemBase: string): string {
   return `${origin}${path}`;
 }
 
-/** Expand a `{z}/{x}/{y}` slippy-tile URL template into a concrete URL. */
+/** 
+ * Expand a `{z}/{x}/{y}` slippy-tile URL template into a concrete URL. 
+ */
 export function expandTileUrl(template: string, z: number, x: number, y: number): string {
   return template
     .replace('{z}', String(z))
