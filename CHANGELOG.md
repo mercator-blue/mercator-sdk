@@ -5,6 +5,30 @@ All notable changes to `@mercator-blue/sdk` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-06-12
+
+### Added
+
+- **GPU particle simulation for streamlines on every binding** (MapLibre/Mapbox,
+  Leaflet, OpenLayers, deck.gl). Particle advection now runs in a fragment
+  shader over ping-pong RGBA8 position textures instead of a per-frame CPU loop,
+  so particle count is effectively free: 100k+ particles render smoothly where a
+  few thousand used to be the practical limit, and the main thread no longer
+  carries the simulation. Reseeding stays on the CPU (it reuses the existing
+  viewport / globe spherical-cap / landmask seeding), and the trail-buffer
+  rendering is unchanged. Enabled by default.
+  - `gpuSim` option (default `true`) — set `false` to fall back to the CPU
+    simulation.
+  - `trailResolutionScale` option (default `1`, range `0.1`–`1`) — render the
+    trail buffer below device resolution (e.g. `0.5`) to cut the full-canvas
+    fade + composite cost for slightly softer trails. On-screen line width and
+    particle motion are unaffected.
+
+### Changed
+
+- No breaking changes. The two options above are additive — existing
+  streamlines code keeps working and transparently gains the GPU simulation.
+
 ## [0.4.8] - 2026-06-12
 
 ### Added
