@@ -5,6 +5,23 @@ All notable changes to `@mercator-blue/sdk` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.8] - 2026-06-12
+
+### Added
+
+- `parseCssColor` now accepts 4- and 8-digit hex with alpha (`#rgba`,
+  `#rrggbbaa`), matching the alpha already supported via `rgba()`. So
+  `lineColor`, `textHaloColor`, etc. can carry opacity as hex.
+
+### Changed
+
+- Internal reorganisation, no public API or runtime change: the color modules
+  (`colormaps`, `palettes`, `colormap-texture`, `css-color`) moved into
+  `core/color/`; the STAC discovery types were split out of `discover.ts` into
+  `core/discover-types.ts`; and the generic `fetchJson` / `resolveUrl` helpers
+  moved from `discover.ts` to `core/urls.ts`. The published entrypoints and
+  their exports are unchanged (`@mercator-blue/sdk/colormaps` etc.).
+
 ## [0.4.7] - 2026-06-12
 
 ### Removed
