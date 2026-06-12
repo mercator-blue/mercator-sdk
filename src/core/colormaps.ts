@@ -33,12 +33,6 @@
 import type { Colormap, ColormapSpec } from './types';
 import { PALETTES as _PALETTES, PALETTE_SIZE } from './palettes';
 
-// `PALETTES` is re-exported (as a documented alias of the `./palettes`
-// registry) so this subpath serves the registry, resolver, and helpers from a
-// single import, and so JSR's doc scorecard counts it. The colormap types are
-// not re-exported here; `ColormapSpec` is available from the main
-// `@mercator-blue/sdk` entry.
-
 /** The built-in colormap palettes (viridis, turbo, magma, ...), keyed by name.
  *  Each value is a `Uint8Array` of `PALETTE_SIZE * 3` RGB bytes. */
 export const PALETTES = _PALETTES;
