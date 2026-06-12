@@ -31,7 +31,7 @@ export function withApiKey(template: string, apiKey: string | undefined): string
 }
 
 /**
- * Landmask URL templates in STAC are absolute paths like
+ * Landmask / contour URL templates in STAC are site-absolute paths like
  * `/tiles/landmask/2026/static/{z}/{x}/{y}.png`. Prepend the origin
  * derived from the item base URL so the consumer gets a fully-resolved
  * URL it can fetch directly.
@@ -55,13 +55,31 @@ export function expandTileUrl(template: string, z: number, x: number, y: number)
     .replace('{y}', String(y));
 }
 
-/** Resolve a relative href against a base URL via the URL constructor
- *  (handles absolute, root-relative, and dot-segment hrefs, like a browser). */
+/** 
+ * Resolve a relative href against a base URL via the URL constructor
+ * (which has built-in support for absolute, root-relative, and dot-segment 
+ * hrefs). 
+ * 
+ * @param base The base URL to resolve against (e.g. the catalog or item URL).
+ * @param href The relative or absolute URL to resolve.
+ * @returns The fully resolved absolute URL.
+ */
 export function resolveUrl(base: string, href: string): string {
   return new URL(href, base).toString();
 }
 
-/** Fetch a URL and parse the body as JSON, throwing on a non-2xx response. */
+/**
+ * Fetch a URL and parse the response body as JSON.
+ *
+ * A thin wrapper over `fetch` used by the STAC walker for catalog,
+ * collection, and item documents. The caller declares the expected shape via
+ * the type parameter; the parsed body is cast to it, not validated at runtime.
+ *
+ * @typeParam T The expected JSON shape (returned as-is, unchecked).
+ * @param url Absolute URL to fetch.
+ * @returns The parsed JSON body, typed as `T`.
+ * @throws Error if the response status is not 2xx (the body is not read).
+ */
 export async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) {
