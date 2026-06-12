@@ -1794,14 +1794,19 @@ export function createStreamlinesLayer(opts: StreamlinesLayerOpts) {
       this._prevCameraKey = cameraKey;
 
       if (GPU_SIM) {
-        this._computeSeedBbox();
-        // A tile finished loading while parked → re-snapshot the velocity
-        // texture (skipped mid-move; the settle branch covers that case).
+        // The seed bbox is NOT recomputed per-frame — it's frozen between
+        // settles (see the settle branch). Recomputing it every frame would
+        // move the viewport-local coordinate frame with the camera, pinning
+        // particles to the screen during a drag (they'd stop tracking the
+        // map). Frozen, decoded positions are fixed mercator and the live
+        // projection matrix tracks them with the map.
         if (this._velDirty && !this._cameraMoving) {
           this.assembleVelTex();
           this._velDirty = false;
         }
-        this.reseedRoundRobinGpu();
+        // Reseeding draws from makeParticle (live viewport) but encodes in the
+        // frozen frame, so skip it mid-move; the settle full-reseed covers it.
+        if (!this._cameraMoving) this.reseedRoundRobinGpu();
         this.simStepGpu(gl);
       } else {
         this.updateParticles();

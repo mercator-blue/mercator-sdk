@@ -1004,15 +1004,16 @@ function ensureLayerClass(): any {
       this._ensureTilesAtZoom(dataZ, tlMx, tlMy, brMx, brMy);
       this._ensureMaskTilesAtZoom(this._maskTargetZ, tlMx, tlMy, brMx, brMy);
 
-      // The padded seed bbox is the shared frame for the velocity texture,
-      // the position encoding, and the points projection (GPU sim only).
-      if (this._gpuSim) this._computeSeedBbox(tlMx, tlMy, brMx, brMy);
-
       // First stable frame after motion: reseed across new viewport. The GPU
-      // path also rebuilds its per-view velocity texture here. Order matters —
-      // after tile-load kicks so the samples have something to draw from.
+      // path also (re)computes its seed bbox + rebuilds the velocity texture
+      // here. The bbox is FROZEN between settles on purpose: it's the origin of
+      // the viewport-local coordinate frame, so recomputing it per-frame would
+      // pin particles to the screen during a drag (they'd stop tracking the
+      // map). Frozen, decoded positions are fixed mercator and the live
+      // u_tl/u_proj_scale track them with the map.
       if (!cameraChanged && !animatingZoom && this._cameraMoving) {
         if (this._gpuSim) {
+          this._computeSeedBbox(tlMx, tlMy, brMx, brMy);
           this._assembleVelTex(dataZ);
           this._fullReseedGpu(dataZ);
           this._gpuReady = true;
@@ -1032,7 +1033,9 @@ function ensureLayerClass(): any {
             this._assembleVelTex(dataZ);
             this._velDirty = false;
           }
-          this._reseedRoundRobinGpu(dataZ);
+          // Reseeding encodes in the frozen frame; skip mid-move (the settle
+          // full-reseed covers it) so we don't seed into the drifting region.
+          if (!this._cameraMoving) this._reseedRoundRobinGpu(dataZ);
           this._simStepGpu(z, tlMx, brMx);
         }
       } else {
