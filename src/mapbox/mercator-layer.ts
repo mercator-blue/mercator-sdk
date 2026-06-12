@@ -14,10 +14,7 @@
 
 import { discoverLatestItem, type DiscoveredItem } from '../core/discover';
 import { withApiKey, absolutiseUrl, DEFAULT_CATALOG_URL } from '../core/urls';
-import type {
-  EncodingKind,
-  MercatorLayerOptions,
-} from '../core/types';
+import type { EncodingKind, MercatorLayerOptions } from '../core/types';
 
 import { createDecodedRasterLayer } from './raster-layer';
 import { createStreamlinesLayer } from './streamlines-layer';
