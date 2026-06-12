@@ -8,17 +8,9 @@
  *
  * @module
  */
-// Public entry for `@mercator-blue/sdk/deck-gl`.
-//
-// deck.gl 9+ binding. Each layer (raster / streamlines / arrows / values /
-// tile-bounds) is a deck.gl Layer subclass that decodes value-encoded
-// tiles client-side. The customer passes the layer into deck.gl's
-// `layers: [...]` array — typically via `MapboxOverlay({ layers: [...] })`
-// on a Mapbox/MapLibre host map.
-//
-// Customers construct layers exclusively through `MercatorLayer.create`
-// or `MercatorLayer.fromItem`. The concrete deck.gl Layer subclasses
-// behind each `viz` are internal implementation details.
+// Each layer is a deck.gl Layer subclass; pass it into deck.gl's `layers`
+// array, typically via `MapboxOverlay({ layers: [...] })`. Construct via
+// `MercatorLayer.create` / `.fromItem`; subclasses are internal.
 
 export { MercatorLayer } from './mercator-layer.js';
 

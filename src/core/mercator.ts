@@ -53,13 +53,13 @@ export function lngLatToMercator(lng: number, lat: number): [number, number] {
   return [lngToMx(lng), latToMy(lat)];
 }
 
-/** Mercator-world x → longitude (degrees). */
-export function mxToLng(mx: number): number {
+/** Mercator-world x → longitude (degrees). Internal inverse helper. */
+function mxToLng(mx: number): number {
   return mx * 360 - 180;
 }
 
-/** Mercator-world y → latitude (degrees). */
-export function myToLat(my: number): number {
+/** Mercator-world y → latitude (degrees). Internal inverse helper. */
+function myToLat(my: number): number {
   const m = Math.PI - 2 * Math.PI * my;
   return (Math.atan(0.5 * (Math.exp(m) - Math.exp(-m))) * 180) / Math.PI;
 }

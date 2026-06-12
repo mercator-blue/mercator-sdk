@@ -7,18 +7,9 @@
  *
  * @module
  */
-// Public entry for `@mercator-blue/sdk/leaflet`.
-//
-// Leaflet 1.x binding. Each layer (raster / streamlines / arrows / values /
-// contours / tile-bounds) is an L.Layer subclass attached to a Leaflet
-// pane. Pans piggyback on Leaflet's own CSS transform (perfect sync with
-// the basemap), zooms scale-transform during the 250 ms anim and
-// re-render at the new zoom on `zoomend`.
-//
-// Customers construct layers exclusively through `MercatorLayer.create`
-// (async; walks the STAC catalog) or `MercatorLayer.fromItem` (sync; when
-// the discovered item is already in hand). The concrete L.Layer subclasses
-// behind each `viz` are internal implementation details.
+// Each layer is an L.Layer subclass attached to a Leaflet pane; construct
+// via `MercatorLayer.create` (async, walks the STAC catalog) or
+// `MercatorLayer.fromItem` (sync). The concrete subclasses are internal.
 
 export { MercatorLayer } from './mercator-layer';
 export type {
