@@ -61,6 +61,9 @@ type RGB = [number, number, number];
  *  in this form because the spec's hex strings are parsed once up-front. */
 type ParsedStop = [number, RGB];
 
+/** 
+ * Convert a hex color string to an RGB tuple. 
+ */
 function hexToRgb(hex: string): RGB {
   let h = hex.replace('#', '');
   if (h.length === 3) h = h.split('').map((c) => c + c).join('');
@@ -68,7 +71,13 @@ function hexToRgb(hex: string): RGB {
   return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
 }
 
-/** Sample an array of [position, [r,g,b]] stops at a given t in [0,1]. */
+/** 
+ * Sample an array of [position, [r,g,b]] stops at a given t in [0,1]. 
+ * 
+ * @returns The interpolated RGB color corresponding to the input position t,
+ *          based on the provided stops. The output RGB values are in the 
+ *          range [0, 255].
+ */
 function sampleStops(stops: ParsedStop[], t: number): RGB {
   t = Math.max(0, Math.min(1, t));
   // Stops are sorted by position. Find the segment.
@@ -88,21 +97,21 @@ function sampleStops(stops: ParsedStop[], t: number): RGB {
   return stops[stops.length - 1][1];
 }
 
-/** A built-in palette table (Uint8 RGB, PALETTE_SIZE × 3) → normalised
+/** A built-in palette table (Uint8 RGB, PALETTE_SIZE × 3) -> normalised
  *  Float32 RGB in [0, 1]. The table is already at the target resolution,
- *  so this is a straight per-byte divide — no resampling. */
+ *  so this is a straight per-byte division, no resampling. */
 function normaliseTable(table: Uint8Array): Float32Array {
   const out = new Float32Array(table.length);
   for (let i = 0; i < table.length; i++) out[i] = table[i] / 255;
   return out;
 }
 
-// Names we've already warned about — keep the console clean if a
+// Names we've already warned about - keep the console clean if a
 // caller passes an unknown name in a tight loop (e.g. on every render).
 const _warnedUnknownPalettes = new Set<string>();
 
 /** Normalise a colormap spec into a `Float32Array(COLORMAP_SIZE * 3)`
- *  — RGB triples in [0, 1].
+ *  - RGB triples in [0, 1].
  *
  *  Accepts the same two shapes as {@link ColormapSpec}:
  *    - string: looks up the canonical built-in table, falls back to viridis
