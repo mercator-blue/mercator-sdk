@@ -30,27 +30,18 @@
  * colour) read the array directly and are resolution-agnostic.
  */
 
-import type {
-  Colormap as _Colormap,
-  ColormapStop as _ColormapStop,
-  ColormapSpec as _ColormapSpec,
-} from './types';
+import type { Colormap, ColormapSpec } from './types';
 import { PALETTES as _PALETTES, PALETTE_SIZE } from './palettes';
 
-// Re-exported as documented aliases so the public `@mercator-blue/sdk/
-// colormaps` subpath exposes the registry, the resolver, and the
-// underlying types (for callers constructing their own palettes) from a
-// single import — and so JSR's doc scorecard counts them.
+// `PALETTES` is re-exported (as a documented alias of the `./palettes`
+// registry) so this subpath serves the registry, resolver, and helpers from a
+// single import, and so JSR's doc scorecard counts it. The colormap types are
+// not re-exported here; `ColormapSpec` is available from the main
+// `@mercator-blue/sdk` entry.
 
 /** The built-in colormap palettes (viridis, turbo, magma, ...), keyed by name.
  *  Each value is a `Uint8Array` of `PALETTE_SIZE * 3` RGB bytes. */
 export const PALETTES = _PALETTES;
-/** An ordered list of colormap stops — the data form of a palette. */
-export type Colormap = _Colormap;
-/** A single colormap anchor: `[position in 0..1, "#rrggbb"]`. */
-export type ColormapStop = _ColormapStop;
-/** A colormap spec: a built-in palette name or an explicit `{stops}` gradient. */
-export type ColormapSpec = _ColormapSpec;
 
 /** Number of RGB entries in a resolved colormap table (the built-in palette
  *  resolution). {@link resolveColormap} returns `COLORMAP_SIZE * 3` floats. */
